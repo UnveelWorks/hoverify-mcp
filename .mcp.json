@@ -1,0 +1,9 @@
+{
+    "mcpServers": {
+        "hoverify": {
+            "command": "npx",
+            "args": ["-y", "hoverify-mcp@0.1.0"],
+            "env": { "HOVERIFY_TOKEN": "${user_config.hoverify_token}" }
+        }
+    }
+}

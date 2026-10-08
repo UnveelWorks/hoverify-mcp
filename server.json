@@ -1,0 +1,28 @@
+{
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.UnveelWorks/hoverify",
+    "title": "Hoverify",
+    "description": "Audit, inspect and screenshot pages in your own browser through the Hoverify extension.",
+    "websiteUrl": "https://tryhoverify.com",
+    "repository": { "url": "https://github.com/UnveelWorks/hoverify-mcp", "source": "github" },
+    "version": "0.1.0",
+    "packages": [
+        {
+            "registryType": "npm",
+            "registryBaseUrl": "https://registry.npmjs.org",
+            "identifier": "hoverify-mcp",
+            "version": "0.1.0",
+            "runtimeHint": "npx",
+            "transport": { "type": "stdio" },
+            "environmentVariables": [
+                {
+                    "name": "HOVERIFY_TOKEN",
+                    "description": "From the AI agent page in the Hoverify popup. It pairs the agent with your browser.",
+                    "isRequired": true,
+                    "isSecret": true,
+                    "format": "string"
+                }
+            ]
+        }
+    ]
+}

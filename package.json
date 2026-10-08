@@ -1,0 +1,51 @@
+{
+    "name": "hoverify-mcp",
+    "version": "0.1.0",
+    "mcpName": "io.github.UnveelWorks/hoverify",
+    "description": "Let AI coding agents audit, inspect and capture pages in your own browser through the Hoverify extension.",
+    "keywords": [
+        "mcp",
+        "mcp-server",
+        "model-context-protocol",
+        "hoverify",
+        "claude-code",
+        "seo",
+        "accessibility",
+        "geo",
+        "screenshot",
+        "browser"
+    ],
+    "homepage": "https://tryhoverify.com",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/UnveelWorks/hoverify-mcp.git"
+    },
+    "bugs": "https://github.com/UnveelWorks/hoverify-mcp/issues",
+    "type": "module",
+    "bin": {
+        "hoverify-mcp": "dist/index.js"
+    },
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "scripts": {
+        "build": "tsc",
+        "test": "tsc && node test/run.mjs",
+        "prepublishOnly": "npm test"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.32.1",
+        "ws": "^8.22.0",
+        "zod": "^4.1.5"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@types/ws": "^8.5.12",
+        "typescript": "^5.6.0"
+    },
+    "license": "MIT"
+}

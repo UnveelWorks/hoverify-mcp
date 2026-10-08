@@ -1,0 +1,8 @@
+{
+    "name": "hoverify",
+    "owner": { "name": "UnveelWorks", "url": "https://tryhoverify.com" },
+    "description": "Hoverify for coding agents: browser audits, element inspection and screenshots through the Hoverify extension.",
+    "plugins": [
+        { "name": "hoverify", "source": "./", "description": "Audit, inspect and screenshot pages in your own browser through the Hoverify extension." }
+    ]
+}
