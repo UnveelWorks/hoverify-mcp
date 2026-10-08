@@ -34,6 +34,7 @@
     },
     "scripts": {
         "build": "tsc",
+        "prepare": "tsc",
         "test": "tsc && node test/run.mjs",
         "prepublishOnly": "npm test"
     },

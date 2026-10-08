@@ -84,6 +84,14 @@ Screenshots are saved as PNG files in your system's temp folder, under `hoverify
 
 ## Running from source
 
+Straight from GitHub, without cloning (it builds on install):
+
+```sh
+claude mcp add hoverify -e HOVERIFY_TOKEN=<token> -- npx -y github:UnveelWorks/hoverify-mcp
+```
+
+Or from a clone:
+
 ```sh
 npm install
 npm run build
