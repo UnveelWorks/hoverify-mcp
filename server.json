@@ -13,16 +13,7 @@
             "identifier": "hoverify-mcp",
             "version": "0.1.0",
             "runtimeHint": "npx",
-            "transport": { "type": "stdio" },
-            "environmentVariables": [
-                {
-                    "name": "HOVERIFY_TOKEN",
-                    "description": "From the AI agent page in the Hoverify popup. It pairs the agent with your browser.",
-                    "isRequired": true,
-                    "isSecret": true,
-                    "format": "string"
-                }
-            ]
+            "transport": { "type": "stdio" }
         }
     ]
 }

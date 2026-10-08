@@ -7,13 +7,5 @@
     "homepage": "https://tryhoverify.com",
     "repository": "https://github.com/UnveelWorks/hoverify-mcp",
     "license": "MIT",
-    "keywords": ["seo", "accessibility", "geo", "screenshot", "browser", "css"],
-    "userConfig": {
-        "hoverify_token": {
-            "type": "string",
-            "title": "Hoverify token",
-            "description": "From the AI agent page in the Hoverify popup. It pairs this agent with your browser.",
-            "sensitive": true
-        }
-    }
+    "keywords": ["seo", "accessibility", "geo", "screenshot", "browser", "css"]
 }

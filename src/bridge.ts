@@ -1,26 +1,28 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
     PROTOCOL,
     PING_INTERVAL,
     NOT_CONNECTED,
-    MISSING_TOKEN,
-    TOKEN_MISMATCH,
+    APPROVAL_NEEDED,
     PEER_REJECTED,
+    PEER_VERSION,
+    EXTENSION_VERSION,
     BRIDGE_RESET,
     CallMessage,
     ResultMessage,
     ExtensionHello,
+    PeerHello,
     ToolOutput,
 } from "./protocol.js";
+import { keyId, loadKey, nonce, prove, proves } from "./key.js";
 
 export interface BridgeOptions
 {
     port: number;
-    token: string;
     name: string;
+    agent: () => string;
     log: (line: string) => void;
 }
 
@@ -39,35 +41,35 @@ const EXTENSION_ORIGIN = /^(chrome|moz)-extension:\/\//;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
-function sameToken(given: unknown, expected: string): boolean
-{
-    if (typeof given !== "string" || !expected) return false;
-    const a = Buffer.from(given);
-    const b = Buffer.from(expected);
-    return a.length === b.length && timingSafeEqual(a, b);
-}
-
 // every agent session runs its own process, but the browser connects once: the first to bind the port relays for the rest
 export class Bridge
 {
     private role: "hub" | "peer" | null = null;
     private server: WebSocketServer | null = null;
     private extension: { socket: WebSocket, hello: ExtensionHello } | null = null;
+    private approval: WebSocket | null = null;
     private hub: WebSocket | null = null;
+    private peers = new Map<WebSocket, string>();
     private pending = new Map<string, Pending>();
     private routes = new Map<string, WebSocket>();
     private seq = 0;
     private closed = false;
-    private extensionRejectedAt = 0;
-    private peerRejected = false;
+    private extensionOutdatedAt = 0;
+    private peerProblem = "";
+    private keyProblem = "";
 
     constructor(private options: BridgeOptions) {}
 
     // election can wait indefinitely on a hub that refuses this session, so the MCP side starts without it
     start()
     {
-        // without a token this session could only block the port for the sessions that have one
-        if (!this.options.token) return;
+        try { loadKey(); }
+        catch (error)
+        {
+            // without a key this session could only block the port for the sessions that have one
+            this.keyProblem = (error as Error).message;
+            return this.options.log(this.keyProblem);
+        }
         this.elect().catch(error => this.options.log(`can't listen on port ${this.options.port}: ${(error as Error).message}`));
     }
 
@@ -84,11 +86,17 @@ export class Bridge
         return this.role;
     }
 
+    agentChanged()
+    {
+        if (this.role === "hub") this.pushAgents();
+        else if (this.hub?.readyState === WebSocket.OPEN) this.hub.send(JSON.stringify({ type: "agent", agent: this.options.agent() }));
+    }
+
     async call(tool: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolOutput>
     {
-        if (!this.options.token) throw new Error(MISSING_TOKEN);
-        for (let i = 0; i < 100 && !this.role && !this.peerRejected; i++) await sleep(20);
-        if (!this.role) throw new Error(this.peerRejected ? PEER_REJECTED : NOT_CONNECTED);
+        if (this.keyProblem) throw new Error(this.keyProblem);
+        for (let i = 0; i < 100 && !this.role && !this.peerProblem; i++) await sleep(20);
+        if (!this.role) throw new Error(this.peerProblem || NOT_CONNECTED);
 
         const id = `${this.options.name}:${++this.seq}`;
         const message: CallMessage = { type: "call", id, tool, args };
@@ -129,15 +137,29 @@ export class Bridge
         for (const id of [...this.pending.keys()]) this.settle({ type: "result", id, ok: false, error: BRIDGE_RESET });
     }
 
+    private agents(): string[]
+    {
+        return [...new Set([this.options.agent(), ...this.peers.values()].filter(Boolean))];
+    }
+
+    private pushAgents()
+    {
+        const message = JSON.stringify({ type: "agents", agents: this.agents() });
+        for (const socket of [this.extension?.socket, this.approval])
+        {
+            if (socket?.readyState === WebSocket.OPEN) socket.send(message);
+        }
+    }
+
     private async waitForExtension(): Promise<WebSocket>
     {
         const until = Date.now() + EXTENSION_WAIT;
         while (!this.extension && Date.now() < until)
         {
-            if (Date.now() - this.extensionRejectedAt < REJECTION_MEMORY) throw new Error(TOKEN_MISMATCH);
+            if (Date.now() - this.extensionOutdatedAt < REJECTION_MEMORY) throw new Error(EXTENSION_VERSION);
             await sleep(50);
         }
-        if (!this.extension) throw new Error(NOT_CONNECTED);
+        if (!this.extension) throw new Error(this.approval ? APPROVAL_NEEDED : NOT_CONNECTED);
         return this.extension.socket;
     }
 
@@ -155,7 +177,7 @@ export class Bridge
         {
             if (await this.becomeHub()) return;
             if (await this.becomePeer()) return;
-            await sleep(this.peerRejected ? REJECTED_RETRY : 100);
+            await sleep(this.peerProblem ? REJECTED_RETRY : 100);
         }
     }
 
@@ -168,7 +190,7 @@ export class Bridge
             {
                 this.server = server;
                 this.role = "hub";
-                this.peerRejected = false;
+                this.peerProblem = "";
                 this.options.log("listening for Hoverify");
                 resolve(true);
             });
@@ -185,27 +207,50 @@ export class Bridge
     {
         return new Promise(resolve =>
         {
+            let key: string;
+            try { key = loadKey(); }
+            catch { return resolve(false); }
+
+            const mine = nonce();
             const socket = new WebSocket(`ws://127.0.0.1:${this.options.port}`, { maxPayload: 64 * 1024 * 1024 });
             // a hub that neither welcomes nor refuses is treated as gone
             const unanswered = setTimeout(() => socket.terminate(), 2000);
-            socket.once("open", () => socket.send(JSON.stringify({ type: "hello", role: "peer", token: this.options.token, protocol: PROTOCOL })));
+            socket.once("open", () => socket.send(JSON.stringify({ type: "hello", role: "peer", protocol: PROTOCOL, nonce: mine, agent: this.options.agent() })));
             socket.once("error", () => resolve(false));
             socket.on("message", raw =>
             {
-                const message = JSON.parse(String(raw));
-                if (message.type !== "welcome") return this.settle(message);
-                clearTimeout(unanswered);
-                this.hub = socket;
-                this.role = "peer";
-                this.peerRejected = false;
-                resolve(true);
+                let message: any;
+                try { message = JSON.parse(String(raw)); }
+                catch { return; }
+
+                if (message.type === "challenge")
+                {
+                    // whatever holds the port without this key gets no calls from this session
+                    if (!proves(message.proof, key, "hub", mine, message.nonce))
+                    {
+                        this.peerProblem = PEER_REJECTED;
+                        return socket.close();
+                    }
+                    return socket.send(JSON.stringify({ type: "auth", proof: prove(key, "client", message.nonce, mine) }));
+                }
+                if (message.type === "welcome")
+                {
+                    if (message.error) return;
+                    clearTimeout(unanswered);
+                    this.hub = socket;
+                    this.role = "peer";
+                    this.peerProblem = "";
+                    return resolve(true);
+                }
+                if (this.hub === socket && message.type === "result") this.settle(message);
             });
             socket.on("close", (code, reason) =>
             {
                 clearTimeout(unanswered);
                 if (this.hub !== socket)
                 {
-                    if (code === 1008 && String(reason) === "wrong token") this.peerRejected = true;
+                    if (code === 1008 && String(reason) === "wrong key") this.peerProblem = PEER_REJECTED;
+                    if (code === 1008 && String(reason).startsWith("protocol")) this.peerProblem = PEER_VERSION;
                     return resolve(false);
                 }
                 this.hub = null;
@@ -221,50 +266,67 @@ export class Bridge
         const origin = request.headers.origin || "";
         if (/^https?:/i.test(origin)) return socket.close(1008, "web pages can't connect");
 
-        let kind: "ext" | "peer" | null = null;
+        let hello: ExtensionHello | PeerHello | null = null;
+        let key = "";
+        let mine = "";
         socket.on("message", raw =>
         {
             let message: any;
             try { message = JSON.parse(String(raw)); }
             catch { return socket.close(1008, "bad message"); }
 
-            if (!kind)
+            if (!hello)
             {
                 const extension = message.role === "ext" && EXTENSION_ORIGIN.test(origin);
-                if (message.type !== "hello" || !sameToken(message.token, this.options.token))
+                const peer = message.role === "peer" && !origin;
+                if (message.type !== "hello" || typeof message.nonce !== "string" || (!extension && !peer)) return socket.close(1008, "unknown client");
+                if (message.protocol !== PROTOCOL)
                 {
-                    if (extension) this.extensionRejectedAt = Date.now();
-                    return socket.close(1008, "wrong token");
+                    if (extension) this.extensionOutdatedAt = Date.now();
+                    socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, error: "version" }));
+                    return socket.close(1008, `protocol ${message.protocol} is not ${PROTOCOL}`);
                 }
-                if (extension) return this.acceptExtension(socket, message);
-                if (message.role === "peer" && !origin)
-                {
-                    kind = "peer";
-                    return socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL }));
-                }
-                return socket.close(1008, "unknown client");
+                try { key = loadKey(); }
+                catch { return socket.close(1011, "no key"); }
+
+                if (extension) this.extensionOutdatedAt = 0;
+                hello = message;
+                mine = nonce();
+                if (extension) this.keepAlive(socket);
+                return socket.send(JSON.stringify({ type: "challenge", nonce: mine, key_id: keyId(key), proof: prove(key, "hub", message.nonce, mine), agents: this.agents() }));
             }
 
-            if (kind === "peer" && message.type === "call") this.relay(socket, message);
+            if (message.type === "auth")
+            {
+                if (!proves(message.proof, key, "client", mine, hello.nonce)) return socket.close(1008, "wrong key");
+                socket.removeAllListeners("message");
+                return hello.role === "ext" ? this.acceptExtension(socket, hello) : this.acceptPeer(socket, hello);
+            }
+            if (hello.role !== "ext") return;
+            // approval means Hoverify is asking its user; it sends pair only once they allow
+            if (message.type === "approval") this.approval = socket;
+            if (message.type === "pair") socket.send(JSON.stringify({ type: "key", key }));
         });
+        socket.on("close", () =>
+        {
+            if (this.approval === socket) this.approval = null;
+        });
+    }
+
+    private keepAlive(socket: WebSocket)
+    {
+        const ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "ping" })), PING_INTERVAL);
+        socket.on("close", () => clearInterval(ping));
     }
 
     private acceptExtension(socket: WebSocket, hello: ExtensionHello)
     {
-        if (hello.protocol !== PROTOCOL)
-        {
-            socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, error: "version" }));
-            return socket.close(1008, `protocol ${hello.protocol} is not ${PROTOCOL}`);
-        }
-
         if (this.extension && this.extension.socket !== socket) this.extension.socket.close(1000, "replaced");
         this.extension = { socket, hello };
-        this.extensionRejectedAt = 0;
-        socket.removeAllListeners("message");
-        socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, server_version: VERSION }));
+        if (this.approval === socket) this.approval = null;
+        socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, server_version: VERSION, agents: this.agents() }));
         this.options.log(`${hello.browser} connected (Hoverify ${hello.extension_version})`);
 
-        const ping = setInterval(() => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "ping" })), PING_INTERVAL);
         socket.on("message", raw =>
         {
             let message: any;
@@ -278,7 +340,6 @@ export class Bridge
         });
         socket.on("close", () =>
         {
-            clearInterval(ping);
             if (this.extension?.socket !== socket) return;
             this.extension = null;
             this.options.log("browser disconnected");
@@ -288,6 +349,31 @@ export class Bridge
             }
             this.routes.clear();
             this.failAll();
+        });
+    }
+
+    private acceptPeer(socket: WebSocket, hello: PeerHello)
+    {
+        this.peers.set(socket, String(hello.agent || ""));
+        socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL }));
+        this.pushAgents();
+
+        socket.on("message", raw =>
+        {
+            let message: any;
+            try { message = JSON.parse(String(raw)); }
+            catch { return; }
+            if (message.type === "call") this.relay(socket, message);
+            if (message.type === "agent")
+            {
+                this.peers.set(socket, String(message.agent || ""));
+                this.pushAgents();
+            }
+        });
+        socket.on("close", () =>
+        {
+            this.peers.delete(socket);
+            this.pushAgents();
         });
     }
 

@@ -9,7 +9,7 @@ The `hoverify` MCP server drives the Hoverify extension in the user's browser. I
 
 ## Before the first call
 
-Call `get_status` once. If it fails, its message says what the user has to do (switch on **Connect to agent**, copy a new token, bring the window forward). Pass that on and stop; retrying won't help.
+Call `get_status` once. If it fails, its message says what the user has to do (switch on **Connect to agent**, click **Allow** in Hoverify, bring the window forward). Pass that on and stop; retrying won't help.
 
 ## Which tab
 
