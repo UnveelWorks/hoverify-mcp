@@ -1,6 +1,7 @@
 export const PROTOCOL = 2;
 export const DEFAULT_PORT = 47862;
 export const PING_INTERVAL = 20_000;
+export const RELEASE_AFTER = 5 * 60_000;
 
 export interface TextContent
 {

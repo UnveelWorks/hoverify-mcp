@@ -22,6 +22,7 @@ export interface BridgeOptions
 {
     port: number;
     name: string;
+    releaseAfter: number;
     agent: () => string;
     log: (line: string) => void;
 }
@@ -37,6 +38,7 @@ const EXTENSION_WAIT = 5000;
 // an extension that's switched on retries every 2 s, or every 30 s after its worker restarts
 const REJECTION_MEMORY = 45_000;
 const REJECTED_RETRY = 2000;
+const IDLE_CHECK = 30_000;
 const EXTENSION_ORIGIN = /^(chrome|moz)-extension:\/\//;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -54,6 +56,9 @@ export class Bridge
     private routes = new Map<string, WebSocket>();
     private seq = 0;
     private closed = false;
+    private dormant = false;
+    private lastActive = Date.now();
+    private idleTimer: NodeJS.Timeout | null = null;
     private extensionOutdatedAt = 0;
     private peerProblem = "";
     private keyProblem = "";
@@ -70,12 +75,15 @@ export class Bridge
             this.keyProblem = (error as Error).message;
             return this.options.log(this.keyProblem);
         }
-        this.elect().catch(error => this.options.log(`can't listen on port ${this.options.port}: ${(error as Error).message}`));
+        this.idleTimer = setInterval(() => this.releaseIfIdle(), Math.min(IDLE_CHECK, this.options.releaseAfter / 4));
+        this.idleTimer.unref();
+        this.join();
     }
 
     close()
     {
         this.closed = true;
+        if (this.idleTimer) clearInterval(this.idleTimer);
         this.hub?.close();
         this.server?.close();
         for (const client of this.server?.clients || []) client.terminate();
@@ -95,6 +103,12 @@ export class Bridge
     async call(tool: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolOutput>
     {
         if (this.keyProblem) throw new Error(this.keyProblem);
+        this.lastActive = Date.now();
+        if (this.dormant)
+        {
+            this.dormant = false;
+            this.join();
+        }
         for (let i = 0; i < 100 && !this.role && !this.peerProblem; i++) await sleep(20);
         if (!this.role) throw new Error(this.peerProblem || NOT_CONNECTED);
 
@@ -127,6 +141,7 @@ export class Bridge
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
+        this.lastActive = Date.now();
         clearTimeout(pending.timer);
         if (message.ok && message.output) pending.resolve(message.output);
         else pending.reject(new Error(message.error || "Hoverify couldn't finish the request"));
@@ -169,6 +184,32 @@ export class Bridge
         socket.send(JSON.stringify(message));
     }
 
+    private join()
+    {
+        this.elect().catch(error => this.options.log(`can't listen on port ${this.options.port}: ${(error as Error).message}`));
+    }
+
+    private releaseIfIdle()
+    {
+        if (!this.role || this.pending.size || Date.now() - this.lastActive < this.options.releaseAfter) return;
+        if (this.role === "hub")
+        {
+            if (this.server?.clients.size) return;
+            this.server?.close();
+            this.server = null;
+        }
+        else
+        {
+            // an idle peer would otherwise take the port back the moment the hub lets go
+            const hub = this.hub;
+            this.hub = null;
+            hub?.close();
+        }
+        this.options.log(this.role === "hub" ? "idle, released the port" : "idle, left the hub");
+        this.role = null;
+        this.dormant = true;
+    }
+
     private async elect()
     {
         // a random delay spreads the survivors so one wins the port cleanly
@@ -191,6 +232,7 @@ export class Bridge
                 this.server = server;
                 this.role = "hub";
                 this.peerProblem = "";
+                this.lastActive = Date.now();
                 this.options.log("listening for Hoverify");
                 resolve(true);
             });
@@ -310,6 +352,7 @@ export class Bridge
         socket.on("close", () =>
         {
             if (this.approval === socket) this.approval = null;
+            if (hello) this.lastActive = Date.now();
         });
     }
 

@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Bridge, VERSION } from "./bridge.js";
-import { DEFAULT_PORT } from "./protocol.js";
+import { DEFAULT_PORT, RELEASE_AFTER } from "./protocol.js";
 import { registerTools } from "./tools.js";
 
 // stdout carries the MCP protocol, so every log line goes to stderr
@@ -21,6 +21,7 @@ const server = new McpServer({ name: "hoverify", version: VERSION });
 const bridge = new Bridge({
     port: Number(process.env.HOVERIFY_MCP_PORT) || DEFAULT_PORT,
     name: `${process.pid}`,
+    releaseAfter: Number(process.env.HOVERIFY_MCP_IDLE_MS) || RELEASE_AFTER,
     agent: () =>
     {
         const client = server.server.getClientVersion();

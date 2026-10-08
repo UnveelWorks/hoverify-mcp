@@ -10,6 +10,8 @@ import { join } from "node:path";
 const ROOT = new URL("..", import.meta.url).pathname;
 const PORT = 47999;
 const CROWD_PORT = 47997;
+const IDLE_PORT = 47995;
+const IDLE_MS = 1500;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const home = () => mkdtempSync(join(tmpdir(), "hoverify-mcp-test-"));
 const HOME = home();
@@ -25,12 +27,12 @@ const check = (name, condition, detail = "") =>
     if (!condition) failed++;
 };
 
-async function agent(name, { dir = HOME, port = PORT } = {})
+async function agent(name, { dir = HOME, port = PORT, idle = 0 } = {})
 {
     const transport = new StdioClientTransport({
         command: process.execPath,
         args: [join(ROOT, "dist/index.js")],
-        env: { ...process.env, HOVERIFY_HOME: dir, HOVERIFY_MCP_PORT: String(port) },
+        env: { ...process.env, HOVERIFY_HOME: dir, HOVERIFY_MCP_PORT: String(port), ...(idle ? { HOVERIFY_MCP_IDLE_MS: String(idle) } : {}) },
         stderr: "pipe",
     });
     const client = new Client({ name: `test-${name}`, version: "0" });
@@ -232,6 +234,37 @@ check("sessions started together share one key", answers.every(a => !a.isError) 
 crowdExt.close();
 await Promise.all(crowd.map(session => session.client.close()));
 
-for (const dir of [HOME, broken, otherHome, crowdHome]) rmSync(dir, { recursive: true, force: true });
+// sessions left open with nothing to do let go of the port and take it back on their next call
+const idleHome = home();
+const X = await agent("X", { dir: idleHome, port: IDLE_PORT, idle: IDLE_MS });
+await sleep(300);
+const idleKey = readFileSync(keyFile(idleHome), "utf8");
+let idleExt = fakeExtension({ key: idleKey, port: IDLE_PORT });
+await keepTrying(idleExt);
+const Y = await agent("Y", { dir: idleHome, port: IDLE_PORT, idle: IDLE_MS });
+const viaPeer = await Y.call("get_status");
+check("an idle test session relays like any other", !viaPeer.isError && idleExt.events.agents.includes("test-Y"), `${text(viaPeer)} ${idleExt.events.agents}`);
+const long = await Y.call("audit_accessibility", { delay_ms: IDLE_MS * 2 });
+check("a peer doesn't leave the hub in the middle of a call", !long.isError, text(long));
+await sleep(IDLE_MS * 2);
+check("an idle peer leaves the hub", !idleExt.events.agents.includes("test-Y") && idleExt.events.agents.includes("test-X"), JSON.stringify(idleExt.events.agents));
+check("a hub with the browser connected keeps the port", !await portFree(IDLE_PORT) && !idleExt.events.closed, JSON.stringify(idleExt.events.closed));
+const rejoined = await Y.call("inspect_element", { selector: "#again" });
+check("the idle peer's next call rejoins the hub", !rejoined.isError && idleExt.events.agents.includes("test-Y"), `${text(rejoined)} ${idleExt.events.agents}`);
+
+idleExt.close();
+await sleep(IDLE_MS * 4);
+check("with the browser gone, idle sessions let go of the port", await portFree(IDLE_PORT));
+const waking = Y.call("get_status");
+idleExt = fakeExtension({ key: idleKey, port: IDLE_PORT });
+check("the next call takes the port back", await keepTrying(idleExt) === "welcome");
+const woke = await waking;
+check("and reaches the browser", !woke.isError && JSON.parse(text(woke)).tool === "get_status", text(woke));
+const relayedAgain = await X.call("get_status");
+check("the old hub's session joins the new one", !relayedAgain.isError && idleExt.events.agents.includes("test-X"), `${text(relayedAgain)} ${idleExt.events.agents}`);
+idleExt.close();
+await Promise.all([X, Y].map(session => session.client.close()));
+
+for (const dir of [HOME, broken, otherHome, crowdHome, idleHome]) rmSync(dir, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
