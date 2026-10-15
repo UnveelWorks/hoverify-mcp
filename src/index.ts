@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Bridge, VERSION } from "./bridge.js";
@@ -16,6 +17,14 @@ const AGENT_NAMES: Record<string, string> = {
     "Visual Studio Code": "VS Code",
 };
 
+function configuredBrowser(): string
+{
+    const at = process.argv.findIndex(arg => arg === "--browser" || arg.startsWith("--browser="));
+    if (at < 0) return (process.env.HOVERIFY_BROWSER || "").trim();
+    const arg = process.argv[at];
+    return (arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : process.argv[at + 1] || "").trim();
+}
+
 const server = new McpServer({ name: "hoverify", version: VERSION });
 
 const bridge = new Bridge({
@@ -27,9 +36,24 @@ const bridge = new Bridge({
         const client = server.server.getClientVersion();
         return client ? AGENT_NAMES[client.name] || client.title || client.name : "";
     },
+    configured: configuredBrowser(),
     log,
 });
-server.server.oninitialized = () => bridge.agentChanged();
+server.server.oninitialized = async () =>
+{
+    bridge.agentChanged();
+    if (!server.server.getClientCapabilities()?.roots) return;
+    try
+    {
+        const { roots } = await server.server.listRoots();
+        const first = roots.find(root => root.uri.startsWith("file:"));
+        if (first) bridge.setProject(fileURLToPath(first.uri));
+    }
+    catch (error)
+    {
+        log(`couldn't read the agent's project folder: ${(error as Error).message}`);
+    }
+};
 registerTools(server, bridge);
 
 bridge.start();

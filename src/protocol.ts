@@ -1,4 +1,4 @@
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 export const DEFAULT_PORT = 47862;
 export const PING_INTERVAL = 20_000;
 export const RELEASE_AFTER = 5 * 60_000;
@@ -23,16 +23,36 @@ export interface ToolOutput
 {
     content: Content[];
     files?: { name: string, data: string }[];
+    files_label?: string;
 }
 
-export interface ExtensionHello
+export interface BrowserState
+{
+    label?: string;
+    focused?: boolean;
+    focused_at?: number;
+    claims?: string[];
+    only?: boolean;
+}
+
+export interface ExtensionHello extends BrowserState
 {
     type: "hello";
     role: "ext";
     protocol: number;
     nonce: string;
     browser: string;
+    browser_id?: string;
     extension_version: string;
+}
+
+export type Picked = "argument" | "config" | "claim" | "pinned" | "last_used" | "moved";
+
+export interface BrowserInfo
+{
+    id: string;
+    label: string;
+    current: boolean;
 }
 
 export interface PeerHello
@@ -41,7 +61,29 @@ export interface PeerHello
     role: "peer";
     protocol: number;
     nonce: string;
+}
+
+export interface Project
+{
+    path: string;
+    name: string;
+}
+
+export interface Bound
+{
+    by: "argument" | "config";
+    name: string;
+    ids: string[];
+}
+
+export interface SessionInfo
+{
+    id: string;
     agent: string;
+    project: Project | null;
+    bound: Bound | null;
+    browser: string;
+    browser_label: string;
 }
 
 // proof is HMAC(key, "hub|<client nonce>|<hub nonce>"); the client answers with auth, HMAC(key, "client|<hub nonce>|<client nonce>")
@@ -60,6 +102,10 @@ export interface CallMessage
     id: string;
     tool: string;
     args: Record<string, unknown>;
+    pinned?: string;
+    named?: string;
+    named_by?: "argument" | "config";
+    session?: string;
 }
 
 export interface ResultMessage
@@ -69,6 +115,9 @@ export interface ResultMessage
     ok: boolean;
     output?: ToolOutput;
     error?: string;
+    browser?: string;
+    picked?: Picked;
+    browsers?: BrowserInfo[];
 }
 
 export const NOT_CONNECTED = "Hoverify isn't connected. Open the Hoverify popup in Chrome or Firefox and switch on Connect to agent, then try again.";
@@ -76,4 +125,6 @@ export const APPROVAL_NEEDED = "Hoverify is asking whether to let this agent con
 export const PEER_REJECTED = "Another agent session holds the connection to Hoverify and uses a different key file. That happens when agents run with different home folders. Set HOVERIFY_HOME to the same folder for every agent, then restart them.";
 export const PEER_VERSION = "Another agent session holds the connection to Hoverify and runs a different version of hoverify-mcp. Restart your agent sessions so they all run the same version.";
 export const EXTENSION_VERSION = "Hoverify and hoverify-mcp are different versions and can't connect. Update the Hoverify extension, and restart the agent so it runs the latest hoverify-mcp.";
+export const BROWSER_MOVED = "This call ran in a different browser, because the one this session was using isn't connected anymore. Tab ids from earlier calls don't apply here.";
+export const BROWSER_CLAIMED = "This call ran in the browser the user keeps this project in, which isn't the one this session was using. Tab ids from earlier calls don't apply here.";
 export const BRIDGE_RESET = "bridge_reset";

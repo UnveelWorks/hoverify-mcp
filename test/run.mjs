@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocket, WebSocketServer } from "ws";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,10 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const PORT = 47999;
 const CROWD_PORT = 47997;
 const IDLE_PORT = 47995;
+const MULTI_PORT = 47993;
+const PICK_PORT = 47991;
+const PROJECT_PORT = 47989;
+const ASK_PORT = 47987;
 const IDLE_MS = 1500;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const home = () => mkdtempSync(join(tmpdir(), "hoverify-mcp-test-"));
@@ -27,12 +31,14 @@ const check = (name, condition, detail = "") =>
     if (!condition) failed++;
 };
 
-async function agent(name, { dir = HOME, port = PORT, idle = 0 } = {})
+// cwd / means no project, so the agent names stay plain unless a case gives it a folder
+async function agent(name, { dir = HOME, port = PORT, idle = 0, args = [], env = {}, cwd = "/" } = {})
 {
     const transport = new StdioClientTransport({
         command: process.execPath,
-        args: [join(ROOT, "dist/index.js")],
-        env: { ...process.env, HOVERIFY_HOME: dir, HOVERIFY_MCP_PORT: String(port), ...(idle ? { HOVERIFY_MCP_IDLE_MS: String(idle) } : {}) },
+        cwd,
+        args: [join(ROOT, "dist/index.js"), ...args],
+        env: { ...process.env, HOVERIFY_HOME: dir, HOVERIFY_MCP_PORT: String(port), ...(idle ? { HOVERIFY_MCP_IDLE_MS: String(idle) } : {}), ...env },
         stderr: "pipe",
     });
     const client = new Client({ name: `test-${name}`, version: "0" });
@@ -42,9 +48,10 @@ async function agent(name, { dir = HOME, port = PORT, idle = 0 } = {})
 }
 
 // key: the key it was allowed with before, or null for a browser that hasn't paired; allow: whether the user says yes at once
-function fakeExtension({ origin = "chrome-extension://abcdefgh", key = null, protocol = 2, allow = true, badProof = false, port = PORT } = {})
+function fakeExtension({ origin = "chrome-extension://abcdefgh", key = null, protocol = 3, allow = true, badProof = false, port = PORT, browserId = "fake-browser-a", label = "Chrome", focused = false } = {})
 {
-    const events = { challenge: null, welcome: null, closed: null, approval: false, key: null, agents: [], calls: [] };
+    const browserState = { label, focused, focused_at: 0 };
+    const events = { challenge: null, welcome: null, closed: null, approval: false, key: null, agents: [], sessions: [], calls: [] };
     let socket;
     let mine;
     const auth = (k, challenge) => socket.send(JSON.stringify({ type: "auth", proof: badProof ? "0".repeat(64) : prove(k, "client", challenge.nonce, mine) }));
@@ -53,7 +60,7 @@ function fakeExtension({ origin = "chrome-extension://abcdefgh", key = null, pro
         mine = nonce();
         Object.assign(events, { challenge: null, welcome: null, closed: null, approval: false });
         socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: origin ? { origin } : {} });
-        socket.on("open", () => socket.send(JSON.stringify({ type: "hello", role: "ext", protocol, nonce: mine, browser: "Chrome 131", extension_version: "9.9.9" })));
+        socket.on("open", () => socket.send(JSON.stringify({ type: "hello", role: "ext", protocol, nonce: mine, browser: "Chrome 131", browser_id: browserId, extension_version: "9.9.9", ...browserState })));
         socket.on("message", async raw =>
         {
             const message = JSON.parse(String(raw));
@@ -72,22 +79,26 @@ function fakeExtension({ origin = "chrome-extension://abcdefgh", key = null, pro
                 key = message.key;
                 auth(key, events.challenge);
             }
-            if (message.type === "welcome") { events.welcome = message; events.agents = message.agents || []; resolve(message.error ? "refused" : "welcome"); }
-            if (message.type === "agents") events.agents = message.agents;
+            if (message.type === "welcome") { events.welcome = message; resolve(message.error ? "refused" : "welcome"); }
+            if (message.type === "agents") { events.agents = message.agents; events.sessions = message.sessions || []; }
             if (message.type === "ping") socket.send(JSON.stringify({ type: "pong" }));
             if (message.type !== "call") return;
             events.calls.push(message);
-            const delay = message.args.delay_ms || (String(message.args.url || "").includes("/slow") ? 1500 : 0);
+            const delay = message.args.delay_ms || (/\/slow|\.slow/.test(String(message.args.url || message.args.selector || "")) ? 1500 : 0);
             if (delay) await sleep(delay);
+            const files = name => ({ name, data: Buffer.from(`bytes of ${name}`).toString("base64") });
             const output = message.tool === "capture"
                 ? { content: [{ type: "text", text: "Screenshot of http://example.test/" }], files: [{ name: "capture-test.png", data: Buffer.from("png-bytes").toString("base64") }] }
-                : { content: [{ type: "text", text: JSON.stringify({ tool: message.tool, args: message.args }) }] };
+                : message.tool === "download_assets"
+                    ? { content: [{ type: "text", text: "Downloaded" }], files: [files("hoverify-assets-test/logo(1).svg"), files("../../escape.txt"), files("/etc/x/y/passwd")], files_label: "Saved files" }
+                    : { content: [{ type: "text", text: JSON.stringify({ tool: message.tool, args: message.args }) }] };
             if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "result", id: message.id, ok: true, output }));
         });
         socket.on("close", (code, reason) => { events.closed = { code, reason: String(reason) }; resolve("closed"); });
         socket.on("error", () => resolve("closed"));
     });
-    return { events, connect, allow: () => socket.send(JSON.stringify({ type: "pair" })), close: () => socket?.close(), get key() { return key; } };
+    const state = patch => { Object.assign(browserState, patch); socket.send(JSON.stringify({ type: "browser", ...browserState })); };
+    return { events, connect, state, allow: () => socket.send(JSON.stringify({ type: "pair" })), close: () => socket?.close(), get key() { return key; } };
 }
 
 const text = result => result.content?.[0]?.text || "";
@@ -113,7 +124,7 @@ const key = readFileSync(keyFile(HOME), "utf8");
 check("the first session writes a key only you can read", /^[0-9a-f]{64}$/.test(key) && (statSync(keyFile(HOME)).mode & 0o777) === 0o600 && (statSync(HOME).mode & 0o077) === 0, `${key} ${statSync(keyFile(HOME)).mode.toString(8)}`);
 
 const tools = await A.client.listTools();
-check("lists the ten tools", tools.tools.length === 10, tools.tools.map(t => t.name).join(","));
+check("lists the sixteen tools", tools.tools.length === 16, tools.tools.map(t => t.name).join(","));
 
 const started = Date.now();
 const lonely = await A.call("get_status");
@@ -146,7 +157,7 @@ check("while it asks, the agent is told to click Allow", waiting.isError && /cho
 const pairing = new Promise(resolve => { const t = setInterval(() => { if (fresh.events.welcome) { clearInterval(t); resolve(); } }, 20); });
 fresh.allow();
 await pairing;
-check("allowing hands the browser the key and connects", fresh.key === key && fresh.events.welcome?.protocol === 2, JSON.stringify(fresh.events.welcome));
+check("allowing hands the browser the key and connects", fresh.key === key && fresh.events.welcome?.protocol === 3, JSON.stringify(fresh.events.welcome));
 fresh.close();
 await sleep(100);
 
@@ -165,6 +176,32 @@ const relayed = await B.call("inspect_element", { selector: "#card" });
 check("a second agent session relays through the hub", JSON.parse(text(relayed)).args.selector === "#card", text(relayed));
 await sleep(100);
 check("the browser sees both agents", ext.events.agents.includes("test-A") && ext.events.agents.includes("test-B"), JSON.stringify(ext.events.agents));
+const sessionOf = (calls, selector) => calls.find(call => call.args.selector === selector)?.session;
+const sessionA = ext.events.calls.find(call => call.tool === "audit_seo")?.session;
+const sessionB = sessionOf(ext.events.calls, "#card");
+check("each session's calls carry its own id", /^[\w-]{8,64}$/.test(sessionA) && /^[\w-]{8,64}$/.test(sessionB) && sessionA !== sessionB, `${sessionA} ${sessionB}`);
+
+// a peer names its session once, in its first report after the handshake; neither a call nor a later report can claim another one
+const rawPeer = (...messages) => new Promise(resolve =>
+{
+    const socket = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    const mine = nonce();
+    socket.on("open", () => socket.send(JSON.stringify({ type: "hello", role: "peer", protocol: 3, nonce: mine })));
+    socket.on("message", raw =>
+    {
+        const message = JSON.parse(String(raw));
+        if (message.type === "challenge") socket.send(JSON.stringify({ type: "auth", proof: prove(key, "client", message.nonce, mine) }));
+        if (message.type === "welcome") for (const next of messages) socket.send(JSON.stringify(next));
+        if (message.type === "result") { socket.close(); resolve(message); }
+    });
+    socket.on("close", code => resolve({ closed: code }));
+});
+const rawCall = selector => ({ type: "call", id: `raw:${selector}`, tool: "inspect_element", args: { selector }, session: sessionA });
+const rawResult = await rawPeer({ type: "agent", agent: "raw", session: "raw-session-1" }, { type: "agent", agent: "raw", session: "raw-session-2" }, rawCall("#raw"));
+check("a call can't claim another session's id, nor a later report", rawResult.ok && sessionOf(ext.events.calls, "#raw") === "raw-session-1", JSON.stringify(rawResult));
+const unreported = await rawPeer(rawCall("#unreported"));
+await sleep(100);
+check("a peer calling before it reports itself is dropped unrouted", unreported.closed === 1008 && !ext.events.calls.some(call => call.args.selector === "#unreported"), JSON.stringify(unreported));
 
 const otherHome = home();
 const C = await agent("C", { dir: otherHome });
@@ -175,19 +212,51 @@ const unaffected = await B.call("get_status");
 check("and the other sessions keep working", !unaffected.isError, text(unaffected));
 
 const shot = await B.call("capture", { mode: "viewport" });
-const saved = shot.content.find(c => /Full-resolution PNG: /.test(c.text || ""));
-const path = saved?.text.replace("Full-resolution PNG: ", "");
+const saved = shot.content.find(c => /Full-resolution image: /.test(c.text || ""));
+const path = saved?.text.replace("Full-resolution image: ", "");
 check("capture files are written to disk and their path returned", path && existsSync(path) && readFileSync(path, "utf8") === "png-bytes", JSON.stringify(shot.content));
+const page = await B.call("capture", { mode: "full_page" });
+check("a full page capture reaches the browser", !page.isError && ext.events.calls.some(call => call.tool === "capture" && call.args.mode === "full_page"), JSON.stringify(page.content));
+const rawShot = await B.call("capture", { mode: "viewport", raw: true });
+check("a raw capture asks the browser for raw pixels", !rawShot.isError && ext.events.calls.some(call => call.tool === "capture" && call.args.raw === true), JSON.stringify(rawShot.content));
+const areaShot = await B.call("capture", { mode: "area", area: { x: 0, y: 800, width: 400, height: 2000 } });
+check("an area capture reaches the browser with its rectangle", !areaShot.isError && ext.events.calls.some(call => call.args.mode === "area" && call.args.area?.height === 2000), JSON.stringify(areaShot.content));
+const downloaded = await B.call("download_assets", { types: ["svg"] });
+const savedPaths = downloaded.content.map(c => c.text || "").join("\n").split("\n").filter(line => line.startsWith("- ")).map(line => line.slice(2));
+const hoverifyDir = join(tmpdir(), "hoverify");
+check("downloaded files are listed under their label", /Saved files:\n- /.test(downloaded.content.map(c => c.text).join("\n")) && savedPaths.length === 3, JSON.stringify(downloaded.content));
+check("a grouped file lands in its folder", savedPaths[0] === join(hoverifyDir, "hoverify-assets-test", "logo(1).svg") && readFileSync(savedPaths[0], "utf8") === "bytes of hoverify-assets-test/logo(1).svg", savedPaths[0]);
+check("no file name can leave the hoverify folder", savedPaths.every(path => path.startsWith(hoverifyDir + "/")) && savedPaths[1] === join(hoverifyDir, "escape.txt") && savedPaths[2] === join(hoverifyDir, "y", "passwd"), JSON.stringify(savedPaths));
+const badArea = await B.call("capture", { mode: "area", area: { x: 0, y: 0, width: 0, height: 10 } });
+check("an empty area is refused before it reaches the browser", badArea.isError, JSON.stringify(badArea.content));
+const designed = await B.call("design_screenshot", { mode: "element", selector: "#card", size: "x_one_image", background: { shader: "marble", palette: "site", settings: { pattern: "edge", swirl: 40 } }, layout: "diagonal", mirror: true, device: { model: "ipad_pro_13_m5" }, annotations: [{ type: "label", selector: "#card", text: "New", color: "#ff00ff" }] });
+const designCall = ext.events.calls.find(call => call.tool === "design_screenshot");
+check("a design reaches the browser with its recipe", !designed.isError && designCall?.args.background?.palette === "site" && designCall.args.background.settings?.swirl === 40 && designCall.args.background.settings.pattern === "edge" && designCall.args.layout === "diagonal" && designCall.args.mirror === true && designCall.args.annotations[0].text === "New" && designCall.args.device.model === "ipad_pro_13_m5", JSON.stringify(designed.content));
+const designCalls = () => ext.events.calls.filter(call => call.tool === "design_screenshot").length;
+const before = designCalls();
+const refusedDesigns = await Promise.all([
+    B.call("design_screenshot", { mode: "viewport", size: "x_post" }),
+    B.call("design_screenshot", { mode: "viewport", background: "rainbow" }),
+    B.call("design_screenshot", { mode: "viewport", annotations: Array.from({ length: 11 }, () => ({ type: "box", selector: "a" })) }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "box", selector: "a", color: "red" }] }),
+    B.call("design_screenshot", { mode: "viewport", device: { model: "nokia_3310" } }),
+    B.call("design_screenshot", { mode: "viewport", background: { shader: "rays", palette: "site", settings: { glitter: 5 } } }),
+    B.call("design_screenshot", { mode: "viewport", background: { shader: "rays", palette: "site", settings: { density: 150 } } }),
+    B.call("design_screenshot", { mode: "viewport", layout: "spiral" }),
+]);
+check("unknown presets, too many annotations, bad colours and unknown or out-of-range shader settings are refused before the browser", refusedDesigns.every(r => r.isError) && designCalls() === before, JSON.stringify(refusedDesigns.map(r => text(r).slice(0, 80))));
 
 // the hub exits mid-call: the idempotent call is retried once the extension reconnects to the new hub
-const inflight = B.call("audit_accessibility", { delay_ms: 1500 });
+const inflight = B.call("inspect_element", { selector: "#takeover.slow" });
 await sleep(300);
 await A.client.close();
 await sleep(400);
 ext = fakeExtension({ key });
 await keepTrying(ext);
 const retried = await inflight;
-check("an idempotent call survives the hub exiting", !retried.isError && JSON.parse(text(retried)).tool === "audit_accessibility", text(retried));
+check("an idempotent call survives the hub exiting", !retried.isError && JSON.parse(text(retried)).args.selector === "#takeover.slow" && ext.events.calls.length > 0, text(retried));
+
+check("a session keeps its id across a hub takeover", ext.events.calls.length > 0 && ext.events.calls.every(call => call.session === sessionB), JSON.stringify(ext.events.calls.map(call => call.session)));
 
 const opened = B.call("open_url", { url: "http://localhost:3000/slow" });
 await sleep(300);
@@ -198,19 +267,30 @@ check("a call with side effects is not retried after a drop", dropped.isError &&
 await B.client.close();
 await sleep(300);
 
-// something else holds the port and answers like a hub, without the key
+// something else holds the port and answers like a hub, without the key: first with a proof it can't make, then skipping the challenge
 const heard = [];
+const hellos = [];
 const impostor = new WebSocketServer({ host: "127.0.0.1", port: PORT });
 impostor.on("connection", socket => socket.on("message", raw =>
 {
     const message = JSON.parse(String(raw));
     heard.push(message.type);
-    if (message.type === "hello") socket.send(JSON.stringify({ type: "challenge", nonce: nonce(), key_id: keyIdOf(key), proof: "f".repeat(64), agents: [] }));
+    if (message.type !== "hello") return;
+    hellos.push(String(raw));
+    socket.send(JSON.stringify(hellos.length % 2
+        ? { type: "challenge", nonce: nonce(), key_id: keyIdOf(key), proof: "f".repeat(64), agents: [] }
+        : { type: "welcome", protocol: 3 }));
 }));
 await new Promise(r => impostor.once("listening", r));
-const D = await agent("D");
+const squatted = realpathSync(mkdtempSync(join(tmpdir(), "squatted-")));
+const D = await agent("D", { cwd: squatted });
 const fooled = await D.call("get_status");
+for (let i = 0; i < 50 && hellos.length < 2; i++) await sleep(100);
+await sleep(300);
+const skipped = await D.call("get_status");
 check("a session won't use a hub that can't prove the key", fooled.isError && /different key file/.test(text(fooled)) && heard.every(type => type === "hello"), `${text(fooled)} heard ${heard}`);
+check("nor one that skips the challenge", hellos.length >= 2 && skipped.isError && /different key file/.test(text(skipped)) && heard.every(type => type === "hello"), `${text(skipped)} heard ${heard}`);
+check("its hello names no agent, session or project folder", hellos.every(hello => !hello.includes(squatted) && Object.keys(JSON.parse(hello)).sort().join() === "nonce,protocol,role,type"), hellos.join(" "));
 await D.client.close();
 await new Promise(r => impostor.close(r));
 await sleep(200);
@@ -265,6 +345,222 @@ check("the old hub's session joins the new one", !relayedAgain.isError && idleEx
 idleExt.close();
 await Promise.all([X, Y].map(session => session.client.close()));
 
-for (const dir of [HOME, broken, otherHome, crowdHome, idleHome]) rmSync(dir, { recursive: true, force: true });
+// two browsers switched on at once, like Chrome and Helium: each keeps its own connection
+const allText = result => result.content.map(c => c.text || "").join("\n");
+const multiHome = home();
+const M = await agent("M", { dir: multiHome, port: MULTI_PORT });
+await sleep(300);
+const multiKey = readFileSync(keyFile(multiHome), "utf8");
+const chrome = fakeExtension({ key: multiKey, port: MULTI_PORT, browserId: "chrome-install-1" });
+const helium = fakeExtension({ key: multiKey, port: MULTI_PORT, browserId: "helium-install-1" });
+await keepTrying(chrome);
+const firstCall = await M.call("inspect_element", { selector: "#m-first" });
+await keepTrying(helium);
+await sleep(300);
+check("a second browser doesn't push the first one off", !chrome.events.closed && !helium.events.closed && !firstCall.isError, JSON.stringify([chrome.events.closed, helium.events.closed]));
+
+// chrome reconnecting puts helium first in line, so a new session lands there while M stays put
+chrome.close();
+await sleep(200);
+await keepTrying(chrome);
+const N = await agent("N", { dir: multiHome, port: MULTI_PORT });
+const nFirst = await N.call("inspect_element", { selector: "#n-first" });
+const mAgain = await M.call("inspect_element", { selector: "#m-again" });
+const ranIn = (ext, selector) => ext.events.calls.some(call => call.args.selector === selector);
+check("a new session's first call goes to the first browser connected", !nFirst.isError && ranIn(helium, "#n-first") && !ranIn(chrome, "#n-first"));
+check("a session stays in the browser its first call ran in", !mAgain.isError && ranIn(chrome, "#m-again") && !ranIn(helium, "#m-again"));
+
+const onHelium = N.call("inspect_element", { selector: "#n.slow" });
+const onChrome = M.call("inspect_element", { selector: "#m-moved.slow" });
+await sleep(300);
+chrome.close();
+const [heliumResult, chromeResult] = await Promise.all([onHelium, onChrome]);
+check("one browser dropping leaves calls in the other alone", !heliumResult.isError && !/different browser/.test(allText(heliumResult)), allText(heliumResult));
+check("a session whose browser is gone moves and says so", !chromeResult.isError && /different browser/.test(allText(chromeResult)) && ranIn(chrome, "#m-moved.slow") && ranIn(helium, "#m-moved.slow"), allText(chromeResult));
+
+const heliumAgain = fakeExtension({ key: multiKey, port: MULTI_PORT, browserId: "helium-install-1" });
+await keepTrying(heliumAgain);
+await sleep(200);
+check("a browser reconnecting replaces only its own old connection", helium.events.closed?.reason === "replaced" && !heliumAgain.events.closed, JSON.stringify(helium.events.closed));
+heliumAgain.close();
+await Promise.all([M, N].map(session => session.client.close()));
+
+// picking a browser: by name, by the project's config, or the one the user used last
+const pickHome = home();
+const P1 = await agent("P1", { dir: pickHome, port: PICK_PORT });
+await sleep(300);
+const pickKey = readFileSync(keyFile(pickHome), "utf8");
+const work = fakeExtension({ key: pickKey, port: PICK_PORT, browserId: "chrome-work-0001", label: "Chrome" });
+const side = fakeExtension({ key: pickKey, port: PICK_PORT, browserId: "helium-side-0001", label: "Helium", focused: true });
+await keepTrying(work);
+await keepTrying(side);
+
+await P1.call("inspect_element", { selector: "#p1-first" });
+check("a new session starts in the browser in use", ranIn(side, "#p1-first") && !ranIn(work, "#p1-first"));
+side.state({ focused: false, focused_at: Date.now() });
+work.state({ focused: true, focused_at: Date.now() });
+await sleep(100);
+const P2 = await agent("P2", { dir: pickHome, port: PICK_PORT });
+await P2.call("inspect_element", { selector: "#p2-first" });
+await P1.call("inspect_element", { selector: "#p1-again" });
+check("focus moving on sends the next new session along", ranIn(work, "#p2-first"));
+check("while a session that already started stays put", ranIn(side, "#p1-again"));
+work.state({ focused: false, focused_at: Date.now() });
+await sleep(100);
+const P3 = await agent("P3", { dir: pickHome, port: PICK_PORT });
+await P3.call("inspect_element", { selector: "#p3-first" });
+check("with no browser in focus, the one used last wins", ranIn(work, "#p3-first"));
+
+await P1.call("inspect_element", { selector: "#asked", browser: "chrome" });
+await P1.call("inspect_element", { selector: "#after-asked" });
+const askedCall = work.events.calls.find(call => call.args.selector === "#asked");
+check("browser picks one by name, and the session stays there", askedCall && !("browser" in askedCall.args) && ranIn(work, "#after-asked"), JSON.stringify(askedCall));
+
+const unknown = await P1.call("get_status", { browser: "firefox" });
+check("an unknown name fails and lists what's connected", unknown.isError && /firefox isn't connected/.test(text(unknown)) && /Chrome \(id chrome-w\)/.test(text(unknown)) && /Helium \(id helium-s\)/.test(text(unknown)), text(unknown));
+const pickedStatus = allText(await P1.call("get_status"));
+check("get_status names the browser, why, and the others", /Browser: Chrome \(id chrome-w\), because you asked for it with browser/.test(pickedStatus) && /- Helium \(id helium-s\)/.test(pickedStatus), pickedStatus);
+
+side.state({ label: "Chrome" });
+await sleep(100);
+const twin = await P1.call("get_status", { browser: "chrome" });
+check("two browsers with one name ask for an id", twin.isError && /More than one connected browser is named chrome/.test(text(twin)), text(twin));
+await P1.call("inspect_element", { selector: "#by-id", browser: "helium-s" });
+check("and the start of an id picks one", ranIn(side, "#by-id"));
+side.state({ label: "Helium" });
+
+work.state({ focused: true, focused_at: Date.now() });
+await sleep(100);
+const C1 = await agent("C1", { dir: pickHome, port: PICK_PORT, args: ["--browser", "helium"] });
+await C1.call("inspect_element", { selector: "#c1" });
+check("--browser in the config wins over the browser in use", ranIn(side, "#c1") && !ranIn(work, "#c1"));
+const C2 = await agent("C2", { dir: pickHome, port: PICK_PORT, env: { HOVERIFY_BROWSER: "Helium" } });
+const c2Status = allText(await C2.call("get_status"));
+check("so does HOVERIFY_BROWSER, and get_status says why", /because this project's MCP config sets --browser Helium/.test(c2Status), c2Status);
+await C2.call("inspect_element", { selector: "#c2-asked", browser: "chrome" });
+const c2After = await C2.call("inspect_element", { selector: "#c2-after" });
+check("a browser the agent was asked for outlasts the project's config", ranIn(work, "#c2-asked") && ranIn(work, "#c2-after") && !ranIn(side, "#c2-after"), allText(c2After));
+side.close();
+const gone = await C1.call("inspect_element", { selector: "#c1-gone" });
+check("a configured browser that's gone is never swapped for another", gone.isError && /helium isn't connected/.test(text(gone)) && !ranIn(work, "#c1-gone"), text(gone));
+work.close();
+await Promise.all([P1, P2, P3, C1, C2].map(session => session.client.close()));
+
+// projects: a session reports its folder, and a browser can keep a project or refuse every other one
+const projectHome = home();
+const landing = realpathSync(mkdtempSync(join(tmpdir(), "landing-")));
+const blog = realpathSync(mkdtempSync(join(tmpdir(), "blog-")));
+const landingName = landing.split("/").pop();
+const L = await agent("L", { dir: projectHome, port: PROJECT_PORT, cwd: landing });
+await sleep(300);
+const projectKey = readFileSync(keyFile(projectHome), "utf8");
+const asking = fakeExtension({ key: null, port: PROJECT_PORT, browserId: "asking-0001", allow: false });
+await keepTrying(asking, "approval");
+check("the allow prompt names the agent's project", asking.events.challenge?.agents.includes(`test-L in ${landingName}`), JSON.stringify(asking.events.challenge?.agents));
+const peek = await agent("peek", { dir: projectHome, port: PROJECT_PORT, cwd: blog });
+await sleep(300);
+check("a browser still asking hears new agents' names, not their folders", asking.events.agents.some(name => name.startsWith("test-peek in blog-")) && !asking.events.sessions.length, JSON.stringify(asking.events));
+await peek.client.close();
+asking.close();
+
+const chromeP = fakeExtension({ key: projectKey, port: PROJECT_PORT, browserId: "chrome-proj-0001", label: "Chrome", focused: true });
+const heliumP = fakeExtension({ key: projectKey, port: PROJECT_PORT, browserId: "helium-proj-0001", label: "Helium" });
+await keepTrying(chromeP);
+await keepTrying(heliumP);
+const B2 = await agent("B2", { dir: projectHome, port: PROJECT_PORT, cwd: blog });
+await L.call("inspect_element", { selector: "#l-first" });
+await B2.call("inspect_element", { selector: "#b-first" });
+await sleep(100);
+const listed = chromeP.events.sessions.find(session => session.agent === "test-L");
+check("browsers see each session's project and browser", listed?.project?.path === landing && listed.browser === "chrome-proj-0001" && listed.browser_label === "Chrome" && heliumP.events.sessions.some(session => session.agent === "test-B2"), JSON.stringify(chromeP.events.sessions));
+
+heliumP.state({ claims: [landing] });
+await sleep(100);
+const kept = await L.call("inspect_element", { selector: "#l-kept" });
+check("a project kept in a browser moves its session there, and says so", ranIn(heliumP, "#l-kept") && /the browser the user keeps this project in/.test(allText(kept)), allText(kept));
+const K = await agent("K", { dir: projectHome, port: PROJECT_PORT, cwd: landing });
+await K.call("inspect_element", { selector: "#k-first" });
+check("a peer reports its project before its first call", ranIn(heliumP, "#k-first") && !ranIn(chromeP, "#k-first"));
+await K.client.close();
+await B2.call("inspect_element", { selector: "#b-still" });
+check("other projects carry on where they were", ranIn(chromeP, "#b-still"));
+const keptStatus = allText(await L.call("get_status"));
+check("get_status names the project and why it's there", new RegExp(`because the user keeps ${landingName} in it`).test(keptStatus) && keptStatus.includes(`Project: ${landingName} (${landing})`), keptStatus);
+const C3 = await agent("C3", { dir: projectHome, port: PROJECT_PORT, cwd: landing, args: ["--browser", "chrome-proj"] });
+await C3.call("inspect_element", { selector: "#c3" });
+check("the project's MCP config wins over a browser keeping it", ranIn(chromeP, "#c3"));
+await sleep(100);
+const c3Listed = heliumP.events.sessions.find(session => session.agent === "test-C3");
+check("browsers hear which browser a binding resolves to, even by id", c3Listed?.bound?.by === "config" && c3Listed.bound.name === "chrome-proj" && c3Listed.bound.ids.join() === "chrome-proj-0001", JSON.stringify(c3Listed));
+
+heliumP.close();
+await sleep(300);
+const offNow = chromeP.events.sessions.find(session => session.agent === "test-L");
+await keepTrying(heliumP);
+await sleep(300);
+const backAgain = chromeP.events.sessions.find(session => session.agent === "test-L");
+check("a browser coming back is named again in the other browsers' lists", offNow?.browser_label === "" && backAgain?.browser_label === "Helium", JSON.stringify([offNow, backAgain]));
+
+await L.call("inspect_element", { selector: "#l-asked", browser: "chrome" });
+const lAfter = await L.call("inspect_element", { selector: "#l-after" });
+await sleep(100);
+const lListed = heliumP.events.sessions.find(session => session.agent === "test-L");
+check("a browser the agent was asked for outlasts a browser keeping the project", ranIn(chromeP, "#l-after") && !/keeps this project in/.test(allText(lAfter)) && lListed?.bound?.by === "argument" && lListed.bound.ids.join() === "chrome-proj-0001", JSON.stringify(lListed));
+
+heliumP.state({ claims: [landing], only: true });
+await sleep(100);
+const turnedAway = await B2.call("get_status", { browser: "helium" });
+check("a browser keeping only its projects turns others away, even by name", turnedAway.isError && /Helium only works for the projects the user keeps in it/.test(text(turnedAway)), text(turnedAway));
+chromeP.close();
+const nowhere = await B2.call("inspect_element", { selector: "#b-nowhere" });
+check("and with only that browser left, other projects get nowhere", nowhere.isError && /Every connected browser/.test(text(nowhere)) && !ranIn(heliumP, "#b-nowhere"), text(nowhere));
+heliumP.close();
+await Promise.all([L, B2, C3].map(session => session.client.close()));
+
+// a browser the agent was asked for is held by id: a newcomer with its name, a rename or a hub takeover doesn't move the session
+const askHome = home();
+const H = await agent("H", { dir: askHome, port: ASK_PORT });
+await sleep(300);
+const askKey = readFileSync(keyFile(askHome), "utf8");
+const held = fakeExtension({ key: askKey, port: ASK_PORT, browserId: "held-ask-0001" });
+await keepTrying(held);
+const P = await agent("P", { dir: askHome, port: ASK_PORT });
+await P.call("inspect_element", { selector: "#p-asked", browser: "chrome" });
+const twinAsk = fakeExtension({ key: askKey, port: ASK_PORT, browserId: "twin-ask-0001", focused: true });
+await keepTrying(twinAsk);
+const afterTwin = await P.call("inspect_element", { selector: "#p-twin" });
+check("a newcomer with the same name doesn't unsettle a browser the agent asked for", !afterTwin.isError && ranIn(held, "#p-twin") && !ranIn(twinAsk, "#p-twin"), text(afterTwin));
+held.state({ label: "Work" });
+await sleep(100);
+const afterRename = await P.call("inspect_element", { selector: "#p-renamed" });
+check("nor does renaming it", !afterRename.isError && ranIn(held, "#p-renamed"), text(afterRename));
+const Q = await agent("Q", { dir: askHome, port: ASK_PORT });
+await Q.call("get_status");
+await H.client.close();
+await sleep(400);
+await keepTrying(held);
+await keepTrying(twinAsk);
+await sleep(300);
+const heldListed = twinAsk.events.sessions.find(session => session.agent === "test-P");
+check("after a hub takeover the browsers still see what the session asked for", heldListed?.bound?.by === "argument" && heldListed.bound.name === "Work" && heldListed.bound.ids.join() === "held-ask-0001", JSON.stringify(heldListed));
+// parallel tool calls: a slow call sent before the agent asked for another browser finishes late
+const slowCall = P.call("inspect_element", { selector: "#p-race.slow" });
+await sleep(200);
+await P.call("inspect_element", { selector: "#p-race-ask", browser: "twin-ask-0001" });
+await slowCall;
+await P.call("inspect_element", { selector: "#p-race-after" });
+check("a call that finishes late can't move the browser the agent asked for", ranIn(held, "#p-race.slow") && ranIn(twinAsk, "#p-race-after") && !ranIn(held, "#p-race-after"));
+await P.call("inspect_element", { selector: "#p-back", browser: "Work" });
+
+held.close();
+await sleep(200);
+const offListed = twinAsk.events.sessions.find(session => session.agent === "test-P");
+const heldGone = await P.call("inspect_element", { selector: "#p-gone" });
+check("a browser the agent asked for that's gone fails instead of moving", heldGone.isError && /^The browser this session was asked to use \(id held-ask\) isn't connected/.test(text(heldGone)) && !text(heldGone).includes("held-ask-0001") && !ranIn(twinAsk, "#p-gone"), text(heldGone));
+check("and the other browsers' lists leave its name blank rather than show an id", offListed?.bound?.by === "argument" && offListed.bound.name === "" && offListed.bound.ids.join() === "held-ask-0001", JSON.stringify(offListed));
+twinAsk.close();
+await Promise.all([P, Q].map(session => session.client.close()));
+
+for (const dir of [HOME, broken, otherHome, squatted, crowdHome, idleHome, multiHome, pickHome, projectHome, landing, blog, askHome]) rmSync(dir, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
