@@ -77,6 +77,10 @@ interface Pending
 }
 
 const EXTENSION_WAIT = 5000;
+const TAKE_OVER = "take over";
+const HANDED_OVER = "handed over";
+// long enough for the newer session to bind the port before the older ones look for a hub again
+const HANDOVER_WAIT = 2000;
 // an extension that's switched on retries every 2 s, or every 30 s after its worker restarts
 const REJECTION_MEMORY = 45_000;
 const REJECTED_RETRY = 2000;
@@ -481,18 +485,24 @@ export class Bridge
                 {
                     if (code === 1008 && String(reason) === "wrong key") this.peerProblem = PEER_REJECTED;
                     if (code === 1008 && String(reason).startsWith("protocol")) this.peerProblem = PEER_VERSION;
+                    if (code === 4000 && String(reason) === TAKE_OVER) this.peerProblem = "";
                     return resolve(false);
                 }
                 this.hub = null;
                 this.role = null;
                 this.failAll();
-                if (!this.closed) this.elect();
+                if (this.closed) return;
+                if (code !== 1008 || String(reason) !== HANDED_OVER) return this.join();
+                this.peerProblem = PEER_VERSION;
+                setTimeout(() => this.join(), HANDOVER_WAIT);
             });
         });
     }
 
     private onConnection(socket: WebSocket, request: IncomingMessage)
     {
+        // unhandled, an error such as a message over maxPayload would end the process; ws closes the socket itself
+        socket.on("error", error => this.options.log(`dropped a connection: ${error.message}`));
         const origin = request.headers.origin || "";
         if (/^https?:/i.test(origin)) return socket.close(1008, "web pages can't connect");
 
@@ -510,11 +520,12 @@ export class Bridge
                 const extension = message.role === "ext" && EXTENSION_ORIGIN.test(origin);
                 const peer = message.role === "peer" && !origin;
                 if (message.type !== "hello" || typeof message.nonce !== "string" || (!extension && !peer)) return socket.close(1008, "unknown client");
-                if (message.protocol !== PROTOCOL)
+                // a newer session goes on to prove the key, and may then take the port (handOver)
+                const newer = peer && typeof message.protocol === "number" && message.protocol > PROTOCOL;
+                if (message.protocol !== PROTOCOL && !newer)
                 {
                     if (extension) this.extensionOutdatedAt = Date.now();
-                    socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, error: "version" }));
-                    return socket.close(1008, `protocol ${message.protocol} is not ${PROTOCOL}`);
+                    return this.refuseVersion(socket, message.protocol);
                 }
                 try { key = loadKey(); }
                 catch { return socket.close(1011, "no key"); }
@@ -530,7 +541,8 @@ export class Bridge
             {
                 if (!proves(message.proof, key, "client", mine, hello.nonce)) return socket.close(1008, "wrong key");
                 socket.removeAllListeners("message");
-                return hello.role === "ext" ? this.acceptExtension(socket, hello) : this.acceptPeer(socket);
+                if (hello.role === "ext") return this.acceptExtension(socket, hello);
+                return hello.protocol === PROTOCOL ? this.acceptPeer(socket) : this.handOver(socket, hello.protocol);
             }
             if (hello.role !== "ext") return;
             // approval means Hoverify is asking its user; it sends pair only once they allow
@@ -542,6 +554,28 @@ export class Bridge
             this.approvals.delete(socket);
             if (hello) this.lastActive = Date.now();
         });
+    }
+
+    private refuseVersion(socket: WebSocket, protocol: unknown)
+    {
+        socket.send(JSON.stringify({ type: "welcome", protocol: PROTOCOL, error: "version" }));
+        socket.close(1008, `protocol ${protocol} is not ${PROTOCOL}`);
+    }
+
+    // after an update the port goes to the newer version, unless a browser on this one still uses it: Hoverify may not have updated yet
+    private handOver(socket: WebSocket, protocol: number)
+    {
+        if (this.browsers.size || this.approvals.size) return this.refuseVersion(socket, protocol);
+        this.options.log(`a session on protocol ${protocol} takes the port`);
+        this.server?.close();
+        this.server = null;
+        this.role = null;
+        this.peerProblem = PEER_VERSION;
+        this.failAll();
+        for (const peer of this.peers.keys()) peer.close(1008, HANDED_OVER);
+        this.peers.clear();
+        socket.close(4000, TAKE_OVER);
+        setTimeout(() => this.join(), HANDOVER_WAIT);
     }
 
     private keepAlive(socket: WebSocket)

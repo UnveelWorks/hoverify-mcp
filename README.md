@@ -7,7 +7,6 @@ It's a standard MCP server over stdio, so any MCP client can use it. Tested end 
 ## Requirements
 
 - The Hoverify extension for Chrome or Firefox, signed in with an active license
-- The AI agent add-on, a one-time purchase in your [Hoverify dashboard](https://dashboard.tryhoverify.com/)
 - Node.js 18 or later
 
 ## Setup
@@ -74,8 +73,10 @@ Hoverify can be on in several browsers at once, say Chrome and Helium. Give each
 | `get_site_stack` | Frameworks, libraries, hosting, DNS and SSL |
 | `inspect_element` | An element's HTML, authored CSS, custom properties and box |
 | `get_selected_element` | The element you pinned or are hovering in the Hoverify inspector |
-| `capture` | A screenshot of the viewport, the full page, an element or an area, with its page context |
-| `design_screenshot` | A finished, shareable image made in Hoverify's screenshot editor: background, padding, browser or device frame, tilt, and annotations pointing at elements by selector |
+| `capture` | A screenshot of the viewport, the full page, an element or an area, with its page context, optionally marked up with annotations pointing at elements by selector |
+| `design_screenshot` | A finished, shareable image made in Hoverify's screenshot editor: a background built from glows, gradients, patterns, type, photos and grain, padding, browser or device frame, tilt, annotations pointing at elements by selector, and headlines, text and logos placed on the canvas, or the same without a screenshot |
+| `get_design` | Reads a design the user has open in the screenshot editor, as they have it now: a preview, its choices in `design_screenshot`'s terms, which of the agent's choices the user changed, and every annotation with whose it is and where it sits |
+| `capture_devices` | The page on up to 6 phones, tablets and desktop sizes, each loaded fresh at its screen size with its own browser's user agent and shown in the device with its browser bars, as Hoverify's Responsive view draws it; or each device's full page |
 | `get_fonts` | Font families with weights, sizes, where they're used and where they load from, plus fonts that didn't load |
 | `get_colors` | Colour variables, the colours used for text, backgrounds and borders, and every declared colour |
 | `list_assets` | Images, inline SVGs, videos, Lottie files, PDFs and the favicon, with sizes and dimensions |
@@ -83,7 +84,7 @@ Hoverify can be on in several browsers at once, say Chrome and Helium. Give each
 
 Audits return a ranked fix list in Markdown by default; pass `format: "json"` for the raw result.
 
-`capture` and `design_screenshot` follow your capture settings in Hoverify: with "Hide sensitive content" on, emails, phone numbers, card numbers, keys and filled-in fields found on the page are pixelated in the image before it leaves the browser, and with "Hide clutter" on, cookie banners and chat widgets are hidden while it captures. The agent can pass `raw: true` to `capture` when it needs those exact pixels, and the result then says the settings were skipped.
+`capture`, `capture_devices`, `design_screenshot` and `get_design` follow your capture settings in Hoverify: with "Hide sensitive content" on, emails, phone numbers, card numbers, keys and filled-in fields found on the page are pixelated in the image before it leaves the browser, and with "Hide clutter" on, cookie banners and chat widgets are hidden while it captures. The agent can pass `raw: true` to `capture` when it needs those exact pixels, and the result then says the settings were skipped.
 
 You can switch off individual tools, PageSpeed and the GEO AI review in the Hoverify popup, on the AI agent page. A tool that's switched off tells the agent so instead of running.
 
@@ -108,13 +109,15 @@ Screenshots are saved as PNG files in your system's temp folder, under `hoverify
 
 | The agent says | What to do |
 |---|---|
-| Hoverify isn't connected | Switch on **Connect to agent** in the popup. It switches off after 30 idle minutes, when you sign out, and without the add-on. |
+| Hoverify isn't connected | Switch on **Connect to agent** in the popup. It switches off after 30 idle minutes and when you sign out. |
 | Hoverify is asking whether to let this agent connect | Click the Hoverify icon and choose **Allow**. |
+| Hoverify isn't connected, and another app already uses port 47862 | Pick a free port under **Port** on Hoverify's AI agent page, then add the server to your agent again with the snippets there. They set `HOVERIFY_MCP_PORT` to the same port. |
 | Another agent session holds the connection and uses a different key file | The agents run with different home folders, so each made its own key. Set `HOVERIFY_HOME` to the same folder for all of them. |
 | Helium isn't connected, or the browser this session was asked to use isn't connected | The session was asked for a browser, or its config names one, and that browser isn't connected. Switch on **Connect to agent** in it, have the agent pass `browser` to use another connected one, or check the name under **Browser name** on its AI agent page. |
 | Helium only works for the projects the user keeps in it | That browser has **Only kept projects** on. Keep this project there on its **Sessions** tab, or switch the option off. |
 | More than one connected browser is named Chrome | Give the browsers different names on their AI agent pages. |
 | Hoverify and hoverify-mcp are different versions | Update the extension, and restart the agent so `npx` runs the latest hoverify-mcp. |
+| Another agent session holds the connection to Hoverify and runs a different version of hoverify-mcp | An agent session started before an update still holds the connection. Restart your agent sessions. A newer session also takes over on its own once no browser is connected through the older one, which happens when Hoverify updates. |
 | The tab never became visible | Chrome can only screenshot a tab that's on screen. Bring the browser window forward, or keep it beside your editor. |
 
 ## Running from source

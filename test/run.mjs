@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { WebSocket, WebSocketServer } from "ws";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,8 @@ const MULTI_PORT = 47993;
 const PICK_PORT = 47991;
 const PROJECT_PORT = 47989;
 const ASK_PORT = 47987;
+const VERSION_PORT = 47985;
+const PAYLOAD_PORT = 47983;
 const IDLE_MS = 1500;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const home = () => mkdtempSync(join(tmpdir(), "hoverify-mcp-test-"));
@@ -32,12 +34,12 @@ const check = (name, condition, detail = "") =>
 };
 
 // cwd / means no project, so the agent names stay plain unless a case gives it a folder
-async function agent(name, { dir = HOME, port = PORT, idle = 0, args = [], env = {}, cwd = "/" } = {})
+async function agent(name, { dir = HOME, port = PORT, idle = 0, args = [], env = {}, cwd = "/", entry = join(ROOT, "dist/index.js") } = {})
 {
     const transport = new StdioClientTransport({
         command: process.execPath,
         cwd,
-        args: [join(ROOT, "dist/index.js"), ...args],
+        args: [entry, ...args],
         env: { ...process.env, HOVERIFY_HOME: dir, HOVERIFY_MCP_PORT: String(port), ...(idle ? { HOVERIFY_MCP_IDLE_MS: String(idle) } : {}), ...env },
         stderr: "pipe",
     });
@@ -98,10 +100,21 @@ function fakeExtension({ origin = "chrome-extension://abcdefgh", key = null, pro
         socket.on("error", () => resolve("closed"));
     });
     const state = patch => { Object.assign(browserState, patch); socket.send(JSON.stringify({ type: "browser", ...browserState })); };
-    return { events, connect, state, allow: () => socket.send(JSON.stringify({ type: "pair" })), close: () => socket?.close(), get key() { return key; } };
+    return { events, connect, state, allow: () => socket.send(JSON.stringify({ type: "pair" })), send: data => socket.send(data), close: () => socket?.close(), get key() { return key; } };
 }
 
 const text = result => result.content?.[0]?.text || "";
+// this build announcing the next protocol, standing in for a newer release
+function newerBuild()
+{
+    const dir = mkdtempSync(join(tmpdir(), "hoverify-mcp-newer-"));
+    cpSync(join(ROOT, "dist"), join(dir, "dist"), { recursive: true });
+    cpSync(join(ROOT, "package.json"), join(dir, "package.json"));
+    symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"));
+    const file = join(dir, "dist/protocol.js");
+    writeFileSync(file, readFileSync(file, "utf8").replace(/PROTOCOL = (\d+)/, (_, n) => `PROTOCOL = ${Number(n) + 1}`));
+    return dir;
+}
 const portFree = (port = PORT) => new Promise(resolve =>
 {
     const probe = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -124,7 +137,7 @@ const key = readFileSync(keyFile(HOME), "utf8");
 check("the first session writes a key only you can read", /^[0-9a-f]{64}$/.test(key) && (statSync(keyFile(HOME)).mode & 0o777) === 0o600 && (statSync(HOME).mode & 0o077) === 0, `${key} ${statSync(keyFile(HOME)).mode.toString(8)}`);
 
 const tools = await A.client.listTools();
-check("lists the sixteen tools", tools.tools.length === 16, tools.tools.map(t => t.name).join(","));
+check("lists the eighteen tools", tools.tools.length === 18, tools.tools.map(t => t.name).join(","));
 
 const started = Date.now();
 const lonely = await A.call("get_status");
@@ -229,6 +242,18 @@ check("a grouped file lands in its folder", savedPaths[0] === join(hoverifyDir, 
 check("no file name can leave the hoverify folder", savedPaths.every(path => path.startsWith(hoverifyDir + "/")) && savedPaths[1] === join(hoverifyDir, "escape.txt") && savedPaths[2] === join(hoverifyDir, "y", "passwd"), JSON.stringify(savedPaths));
 const badArea = await B.call("capture", { mode: "area", area: { x: 0, y: 0, width: 0, height: 10 } });
 check("an empty area is refused before it reaches the browser", badArea.isError, JSON.stringify(badArea.content));
+const marked = await B.call("capture", { mode: "element", selector: "#card", annotations: [{ type: "highlight", selector: "#card h2", size: "l" }, { type: "magnifier", selector: "#card .price" }] });
+check("an annotated capture reaches the browser with its annotations", !marked.isError && ext.events.calls.some(call => call.tool === "capture" && call.args.annotations?.[0]?.type === "highlight" && call.args.annotations[0].size === "l" && call.args.annotations[1].type === "magnifier"), JSON.stringify(marked.content));
+const again = await B.call("capture", { capture_id: "abc", annotations: [{ type: "underline", selector: "#card" }] });
+check("a capture_id needs no mode", !again.isError && ext.events.calls.some(call => call.tool === "capture" && call.args.capture_id === "abc" && call.args.mode === undefined), JSON.stringify(again.content));
+const captureCalls = () => ext.events.calls.filter(call => call.tool === "capture").length;
+const beforeMarks = captureCalls();
+const refusedMarks = await Promise.all([
+    B.call("capture", { mode: "viewport", annotations: [{ type: "squiggle", selector: "a" }] }),
+    B.call("capture", { mode: "viewport", annotations: [{ type: "box", selector: "a", size: "xl" }] }),
+    B.call("capture", { mode: "viewport", annotations: Array.from({ length: 41 }, () => ({ type: "box", selector: "a" })) }),
+]);
+check("unknown annotation types and sizes and too many annotations are refused before the browser", refusedMarks.every(r => r.isError) && captureCalls() === beforeMarks, JSON.stringify(refusedMarks.map(r => text(r).slice(0, 80))));
 const designed = await B.call("design_screenshot", { mode: "element", selector: "#card", size: "x_one_image", background: { shader: "marble", palette: "site", settings: { pattern: "edge", swirl: 40 } }, layout: "diagonal", mirror: true, device: { model: "ipad_pro_13_m5" }, annotations: [{ type: "label", selector: "#card", text: "New", color: "#ff00ff" }] });
 const designCall = ext.events.calls.find(call => call.tool === "design_screenshot");
 check("a design reaches the browser with its recipe", !designed.isError && designCall?.args.background?.palette === "site" && designCall.args.background.settings?.swirl === 40 && designCall.args.background.settings.pattern === "edge" && designCall.args.layout === "diagonal" && designCall.args.mirror === true && designCall.args.annotations[0].text === "New" && designCall.args.device.model === "ipad_pro_13_m5", JSON.stringify(designed.content));
@@ -237,7 +262,7 @@ const before = designCalls();
 const refusedDesigns = await Promise.all([
     B.call("design_screenshot", { mode: "viewport", size: "x_post" }),
     B.call("design_screenshot", { mode: "viewport", background: "rainbow" }),
-    B.call("design_screenshot", { mode: "viewport", annotations: Array.from({ length: 11 }, () => ({ type: "box", selector: "a" })) }),
+    B.call("design_screenshot", { mode: "viewport", annotations: Array.from({ length: 41 }, () => ({ type: "box", selector: "a" })) }),
     B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "box", selector: "a", color: "red" }] }),
     B.call("design_screenshot", { mode: "viewport", device: { model: "nokia_3310" } }),
     B.call("design_screenshot", { mode: "viewport", background: { shader: "rays", palette: "site", settings: { glitter: 5 } } }),
@@ -245,6 +270,86 @@ const refusedDesigns = await Promise.all([
     B.call("design_screenshot", { mode: "viewport", layout: "spiral" }),
 ]);
 check("unknown presets, too many annotations, bad colours and unknown or out-of-range shader settings are refused before the browser", refusedDesigns.every(r => r.isError) && designCalls() === before, JSON.stringify(refusedDesigns.map(r => text(r).slice(0, 80))));
+const pictures = mkdtempSync(join(tmpdir(), "hoverify-pictures-"));
+writeFileSync(join(pictures, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+writeFileSync(join(pictures, "notes.txt"), "not a picture");
+const composed = await B.call("design_screenshot", { mode: "viewport", annotations: [
+    { type: "text", text: "Simple pricing\nfor everyone", at: { anchor: "left", margin: "large" }, role: "headline", font: "site_heading", color: "auto" },
+    { type: "image", path: join(pictures, "logo.png"), at: { anchor: "top_left" }, size: "s" },
+    { type: "image", url: "https://example.com/logo.svg", at: { anchor: "top_right" } },
+] });
+const composedCall = ext.events.calls.filter(call => call.tool === "design_screenshot").pop();
+const [headline, logo, remote] = composedCall?.args.annotations ?? [];
+check("canvas text reaches the browser with its anchor, role and font", !composed.isError && headline?.at?.anchor === "left" && headline.role === "headline" && headline.font === "site_heading" && headline.color === "auto" && headline.text.includes("\n"), JSON.stringify(composed.content));
+check("a picture's path goes over as its bytes, never the path", logo?.data === "data:image/png;base64,iVBORw==" && logo.path === undefined, JSON.stringify(logo));
+check("a picture's url goes over for the browser to fetch", remote?.url === "https://example.com/logo.svg" && remote.data === undefined, JSON.stringify(remote));
+const designsSoFar = () => ext.events.calls.filter(call => call.tool === "design_screenshot").length;
+const beforePictures = designsSoFar();
+const refusedPictures = await Promise.all([
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "image", path: join(pictures, "missing.png"), at: { anchor: "top" } }] }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "image", path: join(pictures, "notes.txt"), at: { anchor: "top" } }] }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "image", path: pictures, at: { anchor: "top" } }] }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "text", text: "Hi", at: { anchor: "middle" } }] }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "text", text: "Hi", at: { anchor: "top" }, role: "title" }] }),
+]);
+check("a missing, non-picture or folder path, an unknown anchor and an unknown role are refused before the browser", refusedPictures.every(r => r.isError) && designsSoFar() === beforePictures && /can't be read/.test(text(refusedPictures[0])) && /isn't a PNG/.test(text(refusedPictures[1])), JSON.stringify(refusedPictures.map(r => text(r).slice(0, 80))));
+rmSync(pictures, { recursive: true, force: true });
+const paired = await B.call("design_screenshot", { mode: "viewport", layout: "pair_fan", shots: [{ capture_id: "abc" }, { mode: "element", selector: "#card", tab_id: 7 }].slice(0, 1) });
+const pairCall = ext.events.calls.filter(call => call.tool === "design_screenshot").pop();
+check("a multi-shot design reaches the browser with its shots and layout", !paired.isError && pairCall?.args.layout === "pair_fan" && pairCall.args.shots?.[0]?.capture_id === "abc", JSON.stringify(paired.content));
+const beforeShots = designsSoFar();
+const refusedShots = await Promise.all([
+    B.call("design_screenshot", { mode: "viewport", shots: [{ capture_id: "a" }, { capture_id: "b" }, { capture_id: "c" }] }),
+    B.call("design_screenshot", { mode: "viewport", layout: "pair_spiral" }),
+    B.call("design_screenshot", { mode: "viewport", shots: [{ mode: "page" }] }),
+]);
+check("more than 2 extra shots, an unknown layout and a bad shot mode are refused before the browser", refusedShots.every(r => r.isError) && designsSoFar() === beforeShots, JSON.stringify(refusedShots.map(r => text(r).slice(0, 80))));
+const free = await B.call("design_screenshot", { mode: "viewport", background: { gradient: ["#0f172a", "#7c3aed"], angle: 120 }, shot: { scale: 140, x: 70, tilt_y: -12 }, annotations: [
+    { type: "shape", shape: "pill", at: { x: 8, y: 10 }, width: 12, height: 5, fill: "#facc15", rotation: -4, opacity: 90 },
+    { type: "text", text: "New", at: { x: 8, y: 10 }, font_size: 40, letter_spacing: 4, background: "#facc15" },
+    { type: "shape", shape: "line", at: { x: 8, y: 30 }, to: { x: 40, y: 30 }, stroke: "#ffffff", stroke_width: 3 },
+    { type: "label", selector: "#card", text: "Here", side: "left" },
+] });
+const freeCall = ext.events.calls.filter(call => call.tool === "design_screenshot").pop();
+check("free placement, raw type, shapes, a shot placement and a gradient reach the browser", !free.isError && freeCall?.args.annotations?.[0]?.shape === "pill" && freeCall.args.annotations[1].font_size === 40 && freeCall.args.annotations[2].to?.x === 40 && freeCall.args.annotations[3].side === "left" && freeCall.args.shot?.tilt_y === -12 && freeCall.args.background?.gradient?.length === 2, JSON.stringify(free.content));
+const beforeFree = designsSoFar();
+const refusedFree = await Promise.all([
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "text", text: "x", at: { x: 200, y: 10 } }] }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "shape", shape: "star", at: { x: 1, y: 1 } }] }),
+    B.call("design_screenshot", { mode: "viewport", shot: { scale: 400 } }),
+    B.call("design_screenshot", { mode: "viewport", background: { gradient: ["#000000"] } }),
+    B.call("design_screenshot", { mode: "viewport", annotations: [{ type: "label", selector: "a", text: "x", side: "middle" }] }),
+]);
+check("out-of-range placement, unknown shapes and sides, a shot too large and a one-colour gradient are refused before the browser", refusedFree.every(r => r.isError) && designsSoFar() === beforeFree, JSON.stringify(refusedFree.map(r => text(r).slice(0, 80))));
+const artPictures = mkdtempSync(join(tmpdir(), "hoverify-art-"));
+writeFileSync(join(artPictures, "photo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+const arty = await B.call("design_screenshot", { mode: "none", size: "web_open_graph", background: { shader: "silk", colors: ["#2563eb", "#7c3aed"], dark: false }, effects: { noise: 0, blur: 2 }, art: [
+    { type: "glow", at: { x: 70, y: 30 }, width: 50, color: "#2563eb80", blend: "screen" },
+    { type: "pattern", pattern: "dots", color: "#ffffff", spacing: 40, size: 3, fade: "edges", opacity: 20 },
+    { type: "text", text: "4.9", at: { x: 50, y: 50, origin: "center" }, font_size: 600, weight: "extrabold", stroke: "#ffffff40", stroke_width: 3, letter_spacing: -20 },
+    { type: "image", path: join(artPictures, "photo.png") },
+    { type: "grain", opacity: 12 },
+    { type: "pattern", pattern: "scatter", seed: 3, color: "#ffffff", spacing: 40 },
+    { type: "shape", shape: "ellipse", at: { x: 50, y: 175, origin: "center" }, width: 170, height: 160, color: "#0b1230" },
+], annotations: [{ type: "text", text: "Out now", at: { x: 8, y: 8 }, weight: "thin" }] });
+const artCall = ext.events.calls.filter(call => call.tool === "design_screenshot").pop();
+const [light, dots, type, photo] = artCall?.args.art ?? [];
+check("art, no shot, the Open Graph size, the agent's shader colours and effects reach the browser", !arty.isError && artCall.args.size === "web_open_graph" && artCall.args.art[5]?.pattern === "scatter" && artCall.args.art[6]?.at.y === 175 && artCall.args.mode === "none" && artCall.args.background?.colors?.length === 2 && artCall.args.background.dark === false && artCall.args.effects?.noise === 0 && light?.blend === "screen" && light.color === "#2563eb80" && dots?.fade === "edges" && type?.weight === "extrabold" && type.letter_spacing === -20 && artCall.args.annotations[0].weight === "thin", JSON.stringify(arty.content));
+check("an art picture's path goes over as its bytes", photo?.data === "data:image/png;base64,iVBORw==" && photo.path === undefined, JSON.stringify(photo));
+rmSync(artPictures, { recursive: true, force: true });
+const beforeArt = designsSoFar();
+const refusedArt = await Promise.all([
+    B.call("design_screenshot", { mode: "none", art: [{ type: "sparkle" }] }),
+    B.call("design_screenshot", { mode: "none", art: Array.from({ length: 41 }, () => ({ type: "grain" })) }),
+    B.call("design_screenshot", { mode: "none", art: [{ type: "glow", color: "#00ffff", blend: "glow" }] }),
+    B.call("design_screenshot", { mode: "none", art: [{ type: "glow", color: "cyan" }] }),
+    B.call("design_screenshot", { mode: "none", art: [{ type: "pattern", pattern: "zigzag" }] }),
+    B.call("design_screenshot", { mode: "none", effects: { noise: 150 } }),
+    B.call("design_screenshot", { mode: "none", art: [{ type: "glow", at: { x: 50, y: 250 }, color: "#00ffff" }] }),
+    B.call("design_screenshot", { mode: "none", background: { shader: "silk", colors: ["#000000", "#111111", "#222222", "#333333"] } }),
+    B.call("design_screenshot", { mode: "page" }),
+]);
+check("unknown art kinds, blends and patterns, too many layers, bad colours, places past 200%, out-of-range effects and too many shader colours are refused before the browser", refusedArt.every(r => r.isError) && designsSoFar() === beforeArt, JSON.stringify(refusedArt.map(r => text(r).slice(0, 80))));
 
 // the hub exits mid-call: the idempotent call is retried once the extension reconnects to the new hub
 const inflight = B.call("inspect_element", { selector: "#takeover.slow" });
@@ -561,6 +666,63 @@ check("and the other browsers' lists leave its name blank rather than show an id
 twinAsk.close();
 await Promise.all([P, Q].map(session => session.client.close()));
 
-for (const dir of [HOME, broken, otherHome, squatted, crowdHome, idleHome, multiHome, pickHome, projectHome, landing, blog, askHome]) rmSync(dir, { recursive: true, force: true });
+// an update: a session on a newer protocol takes the port from an older hub no browser uses, and older sessions never take it back
+const versionHome = home();
+const newer = newerBuild();
+const elder = await agent("elder", { dir: versionHome, port: VERSION_PORT });
+await sleep(400);
+const elderPeer = await agent("elder-peer", { dir: versionHome, port: VERSION_PORT });
+await sleep(400);
+const versionKey = readFileSync(keyFile(versionHome), "utf8");
+
+const squatOutcome = await new Promise(resolve =>
+{
+    const socket = new WebSocket(`ws://127.0.0.1:${VERSION_PORT}`);
+    socket.on("open", () => socket.send(JSON.stringify({ type: "hello", role: "peer", protocol: 99, nonce: nonce() })));
+    socket.on("message", raw => { if (JSON.parse(String(raw)).type === "challenge") socket.send(JSON.stringify({ type: "auth", proof: "0".repeat(64) })); });
+    socket.on("close", (code, reason) => resolve(`${code} ${reason}`));
+});
+const holder = fakeExtension({ key: versionKey, port: VERSION_PORT });
+check("a newer hello without the key can't take the port", squatOutcome === "1008 wrong key" && await keepTrying(holder) === "welcome", squatOutcome);
+
+const young = await agent("young", { dir: versionHome, port: VERSION_PORT, entry: join(newer, "dist/index.js") });
+const youngRefused = await young.call("get_status");
+const elderStill = await elder.call("inspect_element", { selector: "#elder" });
+check("an older hub a browser uses keeps the port", youngRefused.isError && /different version of hoverify-mcp/.test(text(youngRefused)) && !elderStill.isError && ranIn(holder, "#elder"), `${text(youngRefused)} | ${text(elderStill)}`);
+
+holder.close();
+const updated = fakeExtension({ key: versionKey, port: VERSION_PORT, protocol: 4, browserId: "fake-browser-new" });
+const tookOver = await keepTrying(updated);
+const youngNow = await young.call("inspect_element", { selector: "#young" });
+check("with no browser left, the newer session takes the port", tookOver === "welcome" && !youngNow.isError && ranIn(updated, "#young"), `${tookOver} ${text(youngNow)}`);
+const elderNow = await elder.call("get_status");
+const elderPeerNow = await elderPeer.call("get_status");
+check("and the older sessions are told to restart", [elderNow, elderPeerNow].every(r => r.isError && /different version of hoverify-mcp/.test(text(r))), `${text(elderNow)} | ${text(elderPeerNow)}`);
+await sleep(3500);
+const youngLater = await young.call("inspect_element", { selector: "#young-later" });
+check("they don't take the port back", !youngLater.isError && ranIn(updated, "#young-later") && !updated.events.closed, `${text(youngLater)} ${JSON.stringify(updated.events.closed)}`);
+updated.close();
+await Promise.all([elder, elderPeer, young].map(session => session.client.close()));
+
+// a message over the hub's 64 MB limit drops that browser's connection, never the server every agent session goes through
+const payloadHome = home();
+const O = await agent("O", { dir: payloadHome, port: PAYLOAD_PORT });
+await sleep(300);
+const payloadKey = readFileSync(keyFile(payloadHome), "utf8");
+const flooding = fakeExtension({ key: payloadKey, port: PAYLOAD_PORT });
+await keepTrying(flooding);
+const flooded = O.call("open_url", { url: "http://localhost:3000/slow" });
+await sleep(300);
+flooding.send("x".repeat(64 * 1024 * 1024 + 1));
+const floodedResult = await flooded;
+check("a message over 64 MB drops its browser and that browser's calls", floodedResult.isError && /dropped/.test(text(floodedResult)) && flooding.events.closed?.code === 1009, `${text(floodedResult)} ${JSON.stringify(flooding.events.closed)}`);
+const afterFlood = fakeExtension({ key: payloadKey, port: PAYLOAD_PORT });
+const reconnected = await keepTrying(afterFlood);
+const served = await O.call("inspect_element", { selector: "#after-flood" });
+check("and the server keeps serving", reconnected === "welcome" && !served.isError && ranIn(afterFlood, "#after-flood"), text(served));
+afterFlood.close();
+await O.client.close();
+
+for (const dir of [HOME, broken, otherHome, squatted, crowdHome, idleHome, multiHome, pickHome, projectHome, landing, blog, askHome, versionHome, newer, payloadHome]) rmSync(dir, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

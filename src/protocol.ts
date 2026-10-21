@@ -1,3 +1,4 @@
+// hello, challenge and auth keep their shape in every version: an older hub checks a newer session's key with them before handing over the port
 export const PROTOCOL = 3;
 export const DEFAULT_PORT = 47862;
 export const PING_INTERVAL = 20_000;
