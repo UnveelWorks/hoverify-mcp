@@ -2,7 +2,7 @@
     "mcpServers": {
         "hoverify": {
             "command": "npx",
-            "args": ["-y", "hoverify-mcp@0.1.0"]
+            "args": ["-y", "hoverify-mcp@0.1.1"]
         }
     }
 }

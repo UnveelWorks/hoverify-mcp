@@ -1,7 +1,7 @@
 {
     "name": "hoverify",
     "displayName": "Hoverify",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Audit, inspect and screenshot pages in your own browser through the Hoverify extension: SEO, accessibility and AI search audits, element HTML and CSS, and screenshots, on logged-in, staging and localhost pages.",
     "author": { "name": "UnveelWorks", "url": "https://tryhoverify.com" },
     "homepage": "https://tryhoverify.com",

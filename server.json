@@ -5,13 +5,13 @@
     "description": "Audit, inspect and screenshot pages in your own browser through the Hoverify extension.",
     "websiteUrl": "https://tryhoverify.com",
     "repository": { "url": "https://github.com/UnveelWorks/hoverify-mcp", "source": "github" },
-    "version": "0.1.0",
+    "version": "0.1.1",
     "packages": [
         {
             "registryType": "npm",
             "registryBaseUrl": "https://registry.npmjs.org",
             "identifier": "hoverify-mcp",
-            "version": "0.1.0",
+            "version": "0.1.1",
             "runtimeHint": "npx",
             "transport": { "type": "stdio" }
         }
