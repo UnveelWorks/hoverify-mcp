@@ -2,45 +2,178 @@
 
 Lets coding agents use [Hoverify](https://tryhoverify.com) in your own browser: audit a page for SEO, accessibility and AI search, inspect an element's HTML and CSS, and take screenshots. It works on logged-in pages, staging and `localhost`, because it runs in the browser you already have open.
 
-It's a standard MCP server over stdio, so any MCP client can use it. Tested end to end with Claude Code.
+It's a standard MCP server over stdio, so it works with any agent that runs local MCP servers: Claude Code, Codex, Cursor, VS Code, Gemini CLI, OpenCode, Grok Build, Muse Code and the others listed below.
 
 ## Requirements
 
 - The Hoverify extension for Chrome or Firefox, signed in with an active license
 - Node.js 18 or later
+- An agent that runs local (stdio) MCP servers
 
 ## Setup
 
 1. In the Hoverify popup, open **AI agent** and switch on **Connect to agent**.
-2. Add the server to your agent. For Claude Code:
-
-   ```sh
-   claude mcp add hoverify -- npx -y hoverify-mcp
-   ```
-
-   For other agents, add this to their MCP config:
-
-   ```json
-   {
-     "mcpServers": {
-       "hoverify": {
-         "command": "npx",
-         "args": ["-y", "hoverify-mcp"]
-       }
-     }
-   }
-   ```
-
-   Or, in Claude Code, install it as a plugin, which adds a skill that teaches the agent the audit-and-fix loop:
-
-   ```sh
-   claude plugin marketplace add UnveelWorks/hoverify-mcp
-   claude plugin install hoverify@hoverify
-   ```
-
+2. Add the server to your agent, as shown for each agent below.
 3. The first time the agent connects, the Hoverify icon shows a **!**. Click it and choose **Allow**.
 
 You only allow once per computer: every agent on it shares the same key, so the next ones connect without asking. **Forget** on the AI agent page disconnects them all, and Hoverify asks again next time. The connection switches itself off after 30 minutes without calls.
+
+### Add it to your agent
+
+Every agent runs the same thing: the command `npx` with the arguments `-y hoverify-mcp`. Most agents take it in this shape:
+
+```json
+{
+  "mcpServers": {
+    "hoverify": {
+      "command": "npx",
+      "args": ["-y", "hoverify-mcp"]
+    }
+  }
+}
+```
+
+Agents with an add command:
+
+| Agent | Command |
+|---|---|
+| Claude Code | `claude mcp add hoverify -- npx -y hoverify-mcp` |
+| Codex (CLI, IDE extension and app) | `codex mcp add hoverify -- npx -y hoverify-mcp` |
+| Amp | `amp mcp add hoverify -- npx -y hoverify-mcp` |
+| Cline CLI | `cline mcp add hoverify --yes -- npx -y hoverify-mcp` |
+| Devin CLI | `devin mcp add hoverify -s user -- npx -y hoverify-mcp` |
+| Factory Droid | `droid mcp add hoverify "npx -y hoverify-mcp"` |
+| Gemini CLI | `gemini mcp add -s user hoverify npx -y hoverify-mcp` |
+| GitHub Copilot CLI | `copilot mcp add hoverify -- npx -y hoverify-mcp` |
+| Grok Build | `grok mcp add hoverify -- npx -y hoverify-mcp` |
+| Kilo Code | `kilo mcp add hoverify -- npx -y hoverify-mcp` |
+| OpenCode | `opencode mcp add hoverify -- npx -y hoverify-mcp` |
+| Qwen Code | `qwen mcp add hoverify npx -y hoverify-mcp` |
+| VS Code | `code --add-mcp '{"name":"hoverify","type":"stdio","command":"npx","args":["-y","hoverify-mcp"]}'` |
+
+Gemini CLI starts MCP servers only in folders you've trusted, so accept its trust prompt in your project.
+
+Agents that take the config above in a file or a settings screen:
+
+| Agent | Where it goes |
+|---|---|
+| Claude Desktop | Settings > Developer > Edit Config, then restart the app |
+| Antigravity | `~/.gemini/config/mcp_config.json`, or `.agents/mcp_config.json` in a project |
+| Cline in VS Code | MCP Servers > Configure > Configure MCP Servers |
+| Cursor | `~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project |
+| Devin Desktop (formerly Windsurf) | Its MCP settings, or `devin mcp add` as above |
+| JetBrains AI Assistant | Settings > Tools > AI Assistant > Model Context Protocol (MCP) > Add |
+| Junie | `~/.junie/mcp/mcp.json`, or `.junie/mcp/mcp.json` in a project |
+| Kiro | `~/.kiro/settings/mcp.json`, or `.kiro/settings/mcp.json` in a project |
+| Warp | Settings > Agents > MCP servers > Add, or `~/.warp/.mcp.json` |
+
+Agents with their own format:
+
+- **OpenCode**, to share it with a project in `opencode.json` (the add command above writes your global config). Kilo Code takes the same `mcp` block in `kilo.jsonc`.
+
+  ```json
+  {
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "hoverify": {
+        "type": "local",
+        "command": ["npx", "-y", "hoverify-mcp"],
+        "enabled": true
+      }
+    }
+  }
+  ```
+
+- **VS Code**, to share it with a project in `.vscode/mcp.json`:
+
+  ```json
+  {
+    "servers": {
+      "hoverify": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "hoverify-mcp"]
+      }
+    }
+  }
+  ```
+
+- **Zed**, in its settings file:
+
+  ```json
+  {
+    "context_servers": {
+      "hoverify": {
+        "command": "npx",
+        "args": ["-y", "hoverify-mcp"]
+      }
+    }
+  }
+  ```
+
+- **Muse Code**, in `~/.config/muse/settings.json`, which must keep `"schema_version": 1`:
+
+  ```json
+  {
+    "schema_version": 1,
+    "mcp_servers": {
+      "hoverify": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "hoverify-mcp"]
+      }
+    }
+  }
+  ```
+
+- **Goose**, through `goose configure` or in `~/.config/goose/config.yaml`:
+
+  ```yaml
+  extensions:
+    hoverify:
+      name: hoverify
+      type: stdio
+      cmd: npx
+      args: ["-y", "hoverify-mcp"]
+      enabled: true
+      timeout: 300
+  ```
+
+The environment variables below (`HOVERIFY_MCP_PORT`, `HOVERIFY_HOME`, `HOVERIFY_BROWSER`) go in the server's `env` block: `environment` in OpenCode and Kilo Code, `envs` in Goose. Add commands take them as `--env NAME=value`, or `-e NAME=value` in Gemini CLI, Qwen Code and Grok Build, placed before the server's command:
+
+```sh
+codex mcp add hoverify --env HOVERIFY_MCP_PORT=48000 -- npx -y hoverify-mcp
+```
+
+Cline CLI and Devin CLI have no env flag, so add them to the config file; Cline keeps them inside the server's `transport` block. Codex and Copilot CLI don't pass your shell's variables on to the server, so set them in the config rather than in your shell.
+
+### Teach your agent the workflow
+
+[`skills/hoverify`](skills/hoverify) is an [Agent Skill](https://agentskills.io) that teaches the agent the audit-and-fix loop and how to design screenshots.
+
+In Claude Code, the plugin installs the server and the skill together:
+
+```sh
+claude plugin marketplace add UnveelWorks/hoverify-mcp
+claude plugin install hoverify@hoverify
+```
+
+In other agents, or in Claude Code without the plugin, copy the folder into the agent's skills folder:
+
+| Folder | Read by |
+|---|---|
+| `~/.claude/skills/` | Claude Code |
+| `~/.agents/skills/` | Codex, Cursor, VS Code, GitHub Copilot CLI, Gemini CLI, OpenCode, Amp, Zed, Warp, Junie, Factory Droid, Kilo Code, Devin, Grok Build, Muse Code, Goose |
+| `~/.cline/skills/` | Cline |
+| `~/.kiro/skills/` | Kiro |
+| `~/.qwen/skills/` | Qwen Code |
+
+```sh
+git clone --depth 1 https://github.com/UnveelWorks/hoverify-mcp.git /tmp/hoverify-mcp
+mkdir -p ~/.agents/skills && cp -R /tmp/hoverify-mcp/skills/hoverify ~/.agents/skills/
+```
+
+To share it with a project instead, put it in the project's `.agents/skills/`.
 
 ### More than one browser
 
@@ -122,19 +255,16 @@ Screenshots are saved as PNG files in your system's temp folder, under `hoverify
 
 ## Running from source
 
-Straight from GitHub, without cloning (it builds on install):
-
-```sh
-claude mcp add hoverify -- npx -y github:UnveelWorks/hoverify-mcp
-```
+Straight from GitHub, without cloning (it builds on install): in your agent's config, use the arguments `-y github:UnveelWorks/hoverify-mcp` in place of `-y hoverify-mcp`.
 
 Or from a clone:
 
 ```sh
 npm install
 npm run build
-claude mcp add hoverify -- node /path/to/hoverify-mcp/dist/index.js
 npm test
 ```
+
+Then point your agent at the command `node` with the argument `/path/to/hoverify-mcp/dist/index.js`.
 
 A release bumps the version in `package.json`, `server.json` (twice), `.claude-plugin/plugin.json` and the pinned `npx` version in `.mcp.json`.
