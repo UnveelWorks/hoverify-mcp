@@ -177,7 +177,7 @@ To share it with a project instead, put it in the project's `.agents/skills/`.
 
 ### More than one browser
 
-Hoverify can be on in several browsers at once, say Chrome and Helium. Give each a name under **Browser name** on its AI agent page. Browsers built on Chromium call themselves Chrome, so this is how agents tell them apart. Each agent session then picks a browser like this:
+Hoverify can be on in several browsers at once, say Chrome and Helium. Each goes by the activation name you gave it when you signed in, unless you give it another under **Browser name** on its AI agent page. Browsers built on Chromium call themselves Chrome, so this name is how agents tell them apart. Each agent session then picks a browser like this:
 
 1. **You ask for one.** Tell the agent "do it in Helium", and it passes `browser: "helium"` to the tool. The session stays in that browser afterwards, even if it's renamed, ahead of the project's config or a browser keeping the project, until it's asked for another one. If that browser closes, calls say so instead of moving elsewhere.
 2. **The project's config names one.** Add `--browser` and the name to the args in that project's MCP config, and every session in the project uses that browser:
