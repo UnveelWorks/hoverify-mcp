@@ -12,7 +12,7 @@ It's a standard MCP server over stdio, so it works with any agent that runs loca
 
 ## Setup
 
-1. In the Hoverify popup, open **AI agent** and switch on **Connect to agent**.
+1. In the Hoverify popup, open **AI agent** and switch it on.
 2. Add the server to your agent, as shown for each agent below.
 3. The first time the agent connects, the Hoverify icon shows a **!**. Click it and choose **Allow**.
 
@@ -242,11 +242,11 @@ Screenshots are saved as PNG files in your system's temp folder, under `hoverify
 
 | The agent says | What to do |
 |---|---|
-| Hoverify isn't connected | Switch on **Connect to agent** in the popup. It switches off after 30 idle minutes and when you sign out. |
+| Hoverify isn't connected | Switch on **AI agent** in the popup. It switches off after 30 idle minutes and when you sign out. |
 | Hoverify is asking whether to let this agent connect | Click the Hoverify icon and choose **Allow**. |
 | Hoverify isn't connected, and another app already uses port 47862 | Pick a free port under **Port** on Hoverify's AI agent page, then add the server to your agent again with the snippets there. They set `HOVERIFY_MCP_PORT` to the same port. |
 | Another agent session holds the connection and uses a different key file | The agents run with different home folders, so each made its own key. Set `HOVERIFY_HOME` to the same folder for all of them. |
-| Helium isn't connected, or the browser this session was asked to use isn't connected | The session was asked for a browser, or its config names one, and that browser isn't connected. Switch on **Connect to agent** in it, have the agent pass `browser` to use another connected one, or check the name under **Browser name** on its AI agent page. |
+| Helium isn't connected, or the browser this session was asked to use isn't connected | The session was asked for a browser, or its config names one, and that browser isn't connected. Switch on **AI agent** in it, have the agent pass `browser` to use another connected one, or check the name under **Browser name** on its AI agent page. |
 | Helium only works for the projects the user keeps in it | That browser has **Only kept projects** on. Keep this project there on its **Sessions** tab, or switch the option off. |
 | More than one connected browser is named Chrome | Give the browsers different names on their AI agent pages. |
 | Hoverify and hoverify-mcp are different versions | Update the extension, and restart the agent so `npx` runs the latest hoverify-mcp. |

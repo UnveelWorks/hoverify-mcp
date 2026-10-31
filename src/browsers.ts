@@ -40,7 +40,7 @@ export function matching<T extends Named>(browsers: T[], wanted: string): T[]
 export function missing(wanted: string, connected: Named[]): string
 {
     const now = connected.length ? ` Connected now: ${connected.map(named).join(", ")}.` : "";
-    return `${wanted} isn't connected. Switch on Connect to agent in Hoverify in that browser, or pass browser to use another one.${now}`;
+    return `${wanted} isn't connected. Switch on AI agent in Hoverify in that browser, or pass browser to use another one.${now}`;
 }
 
 export function ambiguous(wanted: string, matches: Named[]): string

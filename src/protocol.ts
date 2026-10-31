@@ -121,7 +121,7 @@ export interface ResultMessage
     browsers?: BrowserInfo[];
 }
 
-export const NOT_CONNECTED = "Hoverify isn't connected. Open the Hoverify popup in Chrome or Firefox and switch on Connect to agent, then try again.";
+export const NOT_CONNECTED = "Hoverify isn't connected. Open the Hoverify popup in Chrome or Firefox, click the AI agent icon and switch it on, then try again.";
 export const APPROVAL_NEEDED = "Hoverify is asking whether to let this agent connect. Click the Hoverify icon in the browser and choose Allow, then try again.";
 export const PEER_REJECTED = "Another agent session holds the connection to Hoverify and uses a different key file. That happens when agents run with different home folders. Set HOVERIFY_HOME to the same folder for every agent, then restart them.";
 export const PEER_VERSION = "Another agent session holds the connection to Hoverify and runs a different version of hoverify-mcp. Restart your agent sessions so they all run the same version.";

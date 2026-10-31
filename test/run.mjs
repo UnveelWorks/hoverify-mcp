@@ -141,7 +141,7 @@ check("lists the eighteen tools", tools.tools.length === 18, tools.tools.map(t =
 
 const started = Date.now();
 const lonely = await A.call("get_status");
-check("no browser: clear error after the wait", lonely.isError && /Connect to agent/.test(text(lonely)) && Date.now() - started < 8000, text(lonely));
+check("no browser: clear error after the wait", lonely.isError && /AI agent icon/.test(text(lonely)) && Date.now() - started < 8000, text(lonely));
 
 const web = fakeExtension({ origin: "https://evil.example" });
 await web.connect();
