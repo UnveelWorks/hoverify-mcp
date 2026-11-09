@@ -9,7 +9,7 @@ The `hoverify` MCP server drives the Hoverify extension in the user's browser. I
 
 ## Before the first call
 
-Call `get_status` once. If it fails, its message says what the user has to do (switch on **AI agent**, click **Allow** in Hoverify, bring the window forward). Pass that on and stop; retrying won't help.
+Call `get_status` once. If it fails, its message says what the user has to do (switch on **AI agent**, or click **Allow** in Hoverify). Pass that on and stop; retrying won't help.
 
 ## Which tab
 
@@ -87,5 +87,6 @@ Pass `shots` with up to two more: each a `capture_id` from an earlier capture or
 - `audit_geo` with `ai: true` adds an AI content review. It's slower and uses the model key the user set in Hoverify, so only run it when asked.
 - `audit_seo` with `check_links: true` lists broken links and redirects. With `page_speed: true` it adds Google PageSpeed Insights, which loads the public URL from Google's servers: it can't test localhost, and it only sees changes once they're deployed.
 - If a tool says it's switched off in Hoverify, the user turned it off on purpose. Don't retry it; tell them, and carry on with the tools you have.
-- Screenshots follow the user's privacy settings, so emails, numbers, keys and filled-in fields may come back pixelated and banners hidden; the result says so. Pass `raw: true` to `capture` only when those exact pixels are what you're checking, and tell the user.
-- In Chrome a screenshot needs the tab on screen. If capture says the tab never became visible, ask the user to bring the browser window forward.
+- Screenshots follow the user's privacy settings, so emails, numbers, keys, personal form fields and typed form text may come back pixelated and banners hidden; the result says so. Text tools such as `inspect_element` return the page's text unredacted. Pass `raw: true` to `capture` only when those exact pixels are what you're checking, and tell the user.
+- In Chrome a screenshot needs the tab on screen. If capture says the browser window stayed out of sight, try once more, and if it fails again ask the user to bring that window forward.
+- The user can limit the sites you may open. If `open_url` or `capture_devices` says a site is out of reach, or a tab you opened has moved off the list, don't look for a way around it: ask the user to add the site, or work on the tab they're viewing.

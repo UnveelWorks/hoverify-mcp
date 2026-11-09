@@ -294,9 +294,14 @@ export class Bridge
         return best;
     }
 
+    private keeps(browser: Browser, project: Project): boolean
+    {
+        return browser.claims.some(claim => Browsers.samePath(claim, project.path));
+    }
+
     private accepts(browser: Browser, project: Project | null): boolean
     {
-        return !browser.only || (!!project && browser.claims.includes(project.path));
+        return !browser.only || (!!project && this.keeps(browser, project));
     }
 
     private list(current = ""): BrowserInfo[]
@@ -324,7 +329,7 @@ export class Bridge
             if (!this.accepts(matches[0], project)) throw new Error(Browsers.refused(matches[0].label, project));
             return { browser: matches[0], picked: message.named_by === "config" ? "config" : "argument" };
         }
-        const claimed = project ? this.latest(open.filter(browser => browser.claims.includes(project.path))) : undefined;
+        const claimed = project ? this.latest(open.filter(browser => this.keeps(browser, project))) : undefined;
         if (claimed) return { browser: claimed, picked: "claim" };
         if (message.pinned)
         {

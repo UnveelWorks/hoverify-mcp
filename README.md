@@ -197,7 +197,7 @@ Hoverify can be on in several browsers at once, say Chrome and Helium. Each goes
 | Tool | What it does |
 |---|---|
 | `get_status` | Checks the connection and shows the active tab |
-| `open_url` | Opens a URL for the agent to work on and returns its tab id |
+| `open_url` | Opens a URL for the agent to work on, within the sites you allow, and returns its tab id |
 | `reload_tab` | Reloads a tab and waits for it to load |
 | `close_tab` | Closes one or all of the tabs the agent opened |
 | `audit_seo` | Meta tags, headings, images, links and structured data, plus broken links (`check_links: true`) and PageSpeed Insights (`page_speed: true`) |
@@ -217,11 +217,11 @@ Hoverify can be on in several browsers at once, say Chrome and Helium. Each goes
 
 Audits return a ranked fix list in Markdown by default; pass `format: "json"` for the raw result.
 
-`capture`, `capture_devices`, `design_screenshot` and `get_design` follow your capture settings in Hoverify: with "Hide sensitive content" on, emails, phone numbers, card numbers, keys and filled-in fields found on the page are pixelated in the image before it leaves the browser, and with "Hide clutter" on, cookie banners and chat widgets are hidden while it captures. The agent can pass `raw: true` to `capture` when it needs those exact pixels, and the result then says the settings were skipped.
+`capture`, `capture_devices`, `design_screenshot` and `get_design` follow your capture settings in Hoverify: with "Hide sensitive content" on, emails, phone numbers, card numbers, IBANs and keys found on the page, form fields that ask for personal details such as a name or address, and text typed into the page's form fields are pixelated in the image before it leaves the browser (fields inside another site's frame, such as a payment provider's card fields, aren't scanned), and with "Hide clutter" on, cookie banners and chat widgets are hidden while it captures. The agent can pass `raw: true` to `capture` when it needs those exact pixels, and the result then says the settings were skipped. The setting covers images only: `inspect_element`, `get_selected_element`, the audits and the other text tools return the page's text as it is.
 
 You can switch off individual tools, PageSpeed and the GEO AI review in the Hoverify popup, on the AI agent page. A tool that's switched off tells the agent so instead of running.
 
-The agent can reach the tab you're viewing and tabs it opened with `open_url`, nothing else. It can close only the tabs it opened, it can download only assets that are on the page, and it can't click or type on pages.
+The agent can reach the tab you're viewing (the active tab in the browser window you used last, even while you're in another app) and tabs it opened with `open_url`, nothing else. That limits tabs, not sites: `open_url` can open any site with your signed-in sessions, or a local file. To limit that, switch on "Only these sites" on the Access tab of Hoverify's AI agent page and list the sites the agent may open (each covers its subdomains). Tabs the agent opened stay within that list for as long as it works in them, even while you view them; your own tab stays in reach wherever it is. Switch off "Local files" to stop it opening `file://` pages. Chrome lets it open them only once "Allow access to file URLs" is on for Hoverify, and Firefox never does. It can close only the tabs it opened, it can download only assets that are on the page, and it has no tools to click or type on pages.
 
 ## What leaves your machine
 
@@ -236,7 +236,7 @@ What the tools return goes to your agent, and from there to the agent's model pr
 - `audit_seo` with `page_speed: true` sends the page's URL to Google PageSpeed Insights and the Chrome UX Report.
 - `audit_geo` with `ai: true` sends the page's text to the model provider you set up in Hoverify.
 
-Screenshots are saved as PNG files in your system's temp folder, under `hoverify/`.
+Screenshots are saved as image files in your system's temp folder, under `hoverify/`.
 
 ## Troubleshooting
 
@@ -251,7 +251,7 @@ Screenshots are saved as PNG files in your system's temp folder, under `hoverify
 | More than one connected browser is named Chrome | Give the browsers different names on their AI agent pages. |
 | Hoverify and hoverify-mcp are different versions | Update the extension, and restart the agent so `npx` runs the latest hoverify-mcp. |
 | Another agent session holds the connection to Hoverify and runs a different version of hoverify-mcp | An agent session started before an update still holds the connection. Restart your agent sessions. A newer session also takes over on its own once no browser is connected through the older one, which happens when Hoverify updates. |
-| The tab never became visible | Chrome can only screenshot a tab that's on screen. Bring the browser window forward, or keep it beside your editor. |
+| The browser window stayed out of sight (older versions say the tab never became visible) | Chrome can only screenshot a tab that's on screen, and the window didn't come to the front. Bring it forward, or keep it beside your editor. |
 
 ## Running from source
 

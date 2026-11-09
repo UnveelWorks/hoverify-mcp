@@ -1,6 +1,6 @@
 {
     "name": "hoverify-mcp",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "mcpName": "io.github.UnveelWorks/hoverify",
     "description": "Let AI coding agents audit, inspect and capture pages in your own browser through the Hoverify extension.",
     "keywords": [

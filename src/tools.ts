@@ -162,7 +162,7 @@ const TOOLS: ToolSpec[] = [
     },
     {
         name: "open_url",
-        description: "Open a URL in the browser for Hoverify to work on, for example a local dev server after a change. Returns the tab id to pass to other tools. Only http, https and file URLs. Close the tab with close_tab when you're done.",
+        description: "Open a URL in the browser for Hoverify to work on, for example a local dev server after a change. Returns the tab id to pass to other tools. Only http, https and file URLs, and only the sites the user allows when they limit them. Close the tab with close_tab when you're done.",
         schema: { url: z.string().describe("The URL to open") },
         timeout: 60_000,
         idempotent: false,
@@ -266,7 +266,7 @@ const TOOLS: ToolSpec[] = [
     },
     {
         name: "capture",
-        description: "Take a screenshot of the visible page, the whole scrollable page, one element or a rectangle of the page. Returns a preview image, the page context (URL, viewport, element) and the path of the full-resolution image. An element or area bigger than the screen, like a full page, is scrolled through and stitched, then the page is put back; it takes longer, and a tall result comes back as preview slices from top to bottom. The user's privacy settings apply: sensitive text found on the page (emails, phone and card numbers, keys, filled-in fields) is pixelated and cookie banners and chat widgets are hidden, and the result says what was hidden. Pass annotations to mark the screenshot up (boxes, arrows, labels, numbered steps, highlights, blurs and more, pointing at elements by CSS selector), drawn on the image itself with nothing around it; for a finished, styled image use design_screenshot instead.",
+        description: "Take a screenshot of the visible page, the whole scrollable page, one element or a rectangle of the page. Returns a preview image, the page context (URL, viewport, element) and the path of the full-resolution image. An element or area bigger than the screen, like a full page, is scrolled through and stitched, then the page is put back; it takes longer, and a tall result comes back as preview slices from top to bottom. The user's privacy settings apply: sensitive text found on the page (emails, phone and card numbers, keys, personal form fields, typed form text) is pixelated and cookie banners and chat widgets are hidden, and the result says what was hidden. Pass annotations to mark the screenshot up (boxes, arrows, labels, numbered steps, highlights, blurs and more, pointing at elements by CSS selector), drawn on the image itself with nothing around it; for a finished, styled image use design_screenshot instead.",
         schema: {
             mode: z.enum(["viewport", "full_page", "element", "area"]).optional().describe("viewport for what's on screen, full_page for the whole page, element for one whole element, area for a rectangle of the page. Leave it out when passing capture_id."),
             selector: z.string().optional().describe("CSS selector, required for element mode"),

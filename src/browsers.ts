@@ -12,11 +12,28 @@ interface Named
 
 export const shortId = (id: string) => id.slice(0, 8);
 
-// a server started in / or the home folder (Claude Desktop does) has no project to speak of
+const WINDOWS_PATH = /^(?:[A-Za-z]:(?:[\\/]|$)|\\\\)/;
+
+const isWindows = (path: string) => WINDOWS_PATH.test(path);
+const pathKey = (path: string) => isWindows(path) ? path.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase() : path.replace(/\/+$/, "");
+
+// Windows folders ignore case, and one agent hands over c:\ where another says C:\
+export const samePath = (a: string, b: string) => pathKey(a) === pathKey(b);
+
+function tidy(path: string): string
+{
+    if (!isWindows(path)) return path.replace(/\/+$/, "") || "/";
+    const trimmed = path.replace(/[\\/]+$/, "");
+    return /^[a-z]:/.test(trimmed) ? trimmed[0].toUpperCase() + trimmed.slice(1) : trimmed;
+}
+
+// a server started in a drive's root or the home folder (Claude Desktop does) has no project to speak of
 export function projectOf(path: unknown): Project | null
 {
-    if (typeof path !== "string" || !path || path.length > 1024 || path === "/" || path === homedir()) return null;
-    return { path, name: basename(path) || path };
+    if (typeof path !== "string" || !path || path.length > 1024) return null;
+    const clean = tidy(path);
+    if (clean === "/" || /^[A-Za-z]:$/.test(clean) || samePath(clean, homedir())) return null;
+    return { path: clean, name: basename(clean) || clean };
 }
 
 const named = (browser: Named) => `${browser.label} (id ${shortId(browser.id)})`;

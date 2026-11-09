@@ -552,6 +552,10 @@ work.close();
 await Promise.all([P1, P2, P3, C1, C2].map(session => session.client.close()));
 
 // projects: a session reports its folder, and a browser can keep a project or refuse every other one
+const Browsers = await import(new URL("../dist/browsers.js", import.meta.url).href);
+check("one Windows folder is one project, whatever its case or slashes", Browsers.samePath("c:\\Users\\Miso\\site\\", "C:\\Users\\Miso\\site") && Browsers.samePath("C:/Users/Miso/site", "c:\\users\\miso\\site") && Browsers.samePath("\\\\nas\\Work\\site", "\\\\NAS\\work\\site\\"));
+check("other folders still tell case apart, and a trailing slash doesn't count", !Browsers.samePath("/Users/miso/site", "/Users/Miso/site") && Browsers.samePath("/Users/miso/site/", "/Users/miso/site"));
+check("a Windows project keeps one spelling, and a drive's root is none", Browsers.projectOf("c:\\Users\\Miso\\site\\")?.path === "C:\\Users\\Miso\\site" && Browsers.projectOf("C:\\") === null && Browsers.projectOf("c:/") === null && Browsers.projectOf("/") === null);
 const projectHome = home();
 const landing = realpathSync(mkdtempSync(join(tmpdir(), "landing-")));
 const blog = realpathSync(mkdtempSync(join(tmpdir(), "blog-")));
@@ -579,10 +583,10 @@ await sleep(100);
 const listed = chromeP.events.sessions.find(session => session.agent === "test-L");
 check("browsers see each session's project and browser", listed?.project?.path === landing && listed.browser === "chrome-proj-0001" && listed.browser_label === "Chrome" && heliumP.events.sessions.some(session => session.agent === "test-B2"), JSON.stringify(chromeP.events.sessions));
 
-heliumP.state({ claims: [landing] });
+heliumP.state({ claims: [`${landing}/`] });
 await sleep(100);
 const kept = await L.call("inspect_element", { selector: "#l-kept" });
-check("a project kept in a browser moves its session there, and says so", ranIn(heliumP, "#l-kept") && /the browser the user keeps this project in/.test(allText(kept)), allText(kept));
+check("a project kept in a browser moves its session there, and says so, however its path ends", ranIn(heliumP, "#l-kept") && /the browser the user keeps this project in/.test(allText(kept)), allText(kept));
 const K = await agent("K", { dir: projectHome, port: PROJECT_PORT, cwd: landing });
 await K.call("inspect_element", { selector: "#k-first" });
 check("a peer reports its project before its first call", ranIn(heliumP, "#k-first") && !ranIn(chromeP, "#k-first"));
@@ -612,10 +616,12 @@ await sleep(100);
 const lListed = heliumP.events.sessions.find(session => session.agent === "test-L");
 check("a browser the agent was asked for outlasts a browser keeping the project", ranIn(chromeP, "#l-after") && !/keeps this project in/.test(allText(lAfter)) && lListed?.bound?.by === "argument" && lListed.bound.ids.join() === "chrome-proj-0001", JSON.stringify(lListed));
 
-heliumP.state({ claims: [landing], only: true });
+heliumP.state({ claims: [`${landing}/`], only: true });
 await sleep(100);
 const turnedAway = await B2.call("get_status", { browser: "helium" });
 check("a browser keeping only its projects turns others away, even by name", turnedAway.isError && /Helium only works for the projects the user keeps in it/.test(text(turnedAway)), text(turnedAway));
+const letIn = await L.call("get_status", { browser: "helium" });
+check("and lets in the project it keeps, however its path ends", !letIn.isError, text(letIn));
 chromeP.close();
 const nowhere = await B2.call("inspect_element", { selector: "#b-nowhere" });
 check("and with only that browser left, other projects get nowhere", nowhere.isError && /Every connected browser/.test(text(nowhere)) && !ranIn(heliumP, "#b-nowhere"), text(nowhere));
